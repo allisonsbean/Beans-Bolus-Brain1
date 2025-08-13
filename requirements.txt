@@ -3,3 +3,4 @@ plotly
 pandas
 pydexcom
 Pillow
+anthropic
