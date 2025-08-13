@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Bean's Bolus Brain
 
 An AI-powered diabetes management dashboard that provides:
@@ -12,3 +13,7 @@ An AI-powered diabetes management dashboard that provides:
 - Bolus calculator with 10% protein rule
 - Time in range analytics
 - Mobile-responsive design
+=======
+# Beans Bolus Brain
+AI Powered Diabetes Manager
+>>>>>>> 994b49e0bd3edb115eb2abf9f31f839b729d1c67
