@@ -9,10 +9,6 @@ from pydexcom import Dexcom
 import requests
 import json
 from glucose_predictor import GlucosePredictionEngine
-import base64
-import io
-from PIL import Image
-import anthropic
 
 # Page configuration
 st.set_page_config(
@@ -33,8 +29,8 @@ if 'basal_dose' not in st.session_state:
     st.session_state.basal_dose = 19
 
 # Diabetes settings
-CARB_RATIO = 12
-CORRECTION_FACTOR = 50
+CARB_RATIO = 12  # 1 unit per 12g carbs
+CORRECTION_FACTOR = 50  # 1 unit per 50 mg/dL above target
 TARGET_GLUCOSE = 115
 GLUCOSE_RANGE = (80, 130)
 MAX_BOLUS = 20
@@ -47,12 +43,15 @@ eastern = pytz.timezone('US/Eastern')
 def get_dexcom_data():
     """Get real-time glucose data from Dexcom Share"""
     try:
+        # Use direct credentials for local development
         dexcom = Dexcom(username="allisonsbean@gmail.com", password="Allison9")
         glucose_value = dexcom.get_current_glucose_reading()
         
         if glucose_value:
+            # Use the 'datetime' attribute
             timestamp = glucose_value.datetime
             
+            # Convert to Eastern time
             if timestamp.tzinfo is None:
                 timestamp = eastern.localize(timestamp)
             else:
@@ -65,19 +64,10 @@ def get_dexcom_data():
                 'timestamp': timestamp
             }
             
-            # Check if this reading already exists
-            existing_reading = None
-            for reading in st.session_state.glucose_readings:
-                if (reading['timestamp'] == glucose_data['timestamp'] and 
-                    reading['value'] == glucose_data['value']):
-                    existing_reading = reading
-                    break
-            
-            # Only add if it's a new reading
-            if not existing_reading:
+            # Add to session state if not duplicate
+            if not st.session_state.glucose_readings or \
+               st.session_state.glucose_readings[-1]['timestamp'] != glucose_data['timestamp']:
                 st.session_state.glucose_readings.append(glucose_data)
-                if len(st.session_state.glucose_readings) > 100:
-                    st.session_state.glucose_readings = st.session_state.glucose_readings[-100:]
                 
             return glucose_data
         return None
@@ -126,12 +116,20 @@ def add_meal_entry(carbs, protein=0, calories=0, description=""):
 
 def calculate_bolus_suggestion(carbs, protein, current_glucose, current_iob):
     """Calculate bolus suggestion with IOB adjustment"""
+    # Carb bolus
     carb_bolus = carbs / CARB_RATIO
+    
+    # Protein bolus (10% of protein grams converted to carb equivalent)
     protein_carb_equivalent = protein * 0.1
     protein_bolus = protein_carb_equivalent / CARB_RATIO
+    
+    # Correction bolus (adjusted for IOB)
     correction_needed = max(0, current_glucose - TARGET_GLUCOSE)
     correction_bolus = correction_needed / CORRECTION_FACTOR
+    
+    # Adjust for IOB
     adjusted_correction = max(0, correction_bolus - current_iob)
+    
     total_bolus = carb_bolus + protein_bolus + adjusted_correction
     total_bolus = min(total_bolus, MAX_BOLUS)
     
@@ -153,6 +151,7 @@ def display_glucose_status(glucose_data):
     trend = glucose_data.get('trend', 'Unknown')
     arrow = glucose_data.get('trend_arrow', '')
     
+    # Determine status and color
     if value < 70:
         status = "🔴 URGENT LOW"
         color = "red"
@@ -175,21 +174,25 @@ def display_glucose_status(glucose_data):
     st.markdown(f"<p style='text-align: center;'>Trend: {trend}</p>", unsafe_allow_html=True)
 
 def create_glucose_chart():
-    """Create glucose trend chart"""
+    """Create glucose trend chart with meal and insulin markers"""
     if not st.session_state.glucose_readings:
         return None
     
+    # Convert to DataFrame
     df_glucose = pd.DataFrame(st.session_state.glucose_readings)
     df_glucose['timestamp'] = pd.to_datetime(df_glucose['timestamp'])
     
+    # Filter to last 12 hours
     cutoff_time = datetime.now(eastern) - timedelta(hours=12)
     df_glucose = df_glucose[df_glucose['timestamp'] >= cutoff_time]
     
     if df_glucose.empty:
         return None
     
+    # Create the chart
     fig = go.Figure()
     
+    # Add glucose line
     fig.add_trace(go.Scatter(
         x=df_glucose['timestamp'],
         y=df_glucose['value'],
@@ -199,8 +202,33 @@ def create_glucose_chart():
         marker=dict(size=6)
     ))
     
+    # Add target range
     fig.add_hline(y=80, line_dash="dash", line_color="green", annotation_text="Target Range")
     fig.add_hline(y=130, line_dash="dash", line_color="green")
+    
+    # Add meal markers
+    for meal in st.session_state.meal_log:
+        meal_time = meal['timestamp']
+        if isinstance(meal_time, str):
+            meal_time = datetime.fromisoformat(meal_time).replace(tzinfo=eastern)
+        elif not hasattr(meal_time, 'tzinfo') or meal_time.tzinfo is None:
+            meal_time = eastern.localize(meal_time)
+        
+        if meal_time >= cutoff_time:
+            fig.add_vline(x=meal_time, line_dash="dot", line_color="orange", 
+                         annotation_text=f"🍽️ {meal['carbs']}g")
+    
+    # Add insulin markers
+    for insulin in st.session_state.insulin_log:
+        insulin_time = insulin['timestamp']
+        if isinstance(insulin_time, str):
+            insulin_time = datetime.fromisoformat(insulin_time).replace(tzinfo=eastern)
+        elif not hasattr(insulin_time, 'tzinfo') or insulin_time.tzinfo is None:
+            insulin_time = eastern.localize(insulin_time)
+        
+        if insulin_time >= cutoff_time and insulin['type'] == 'bolus':
+            fig.add_vline(x=insulin_time, line_dash="dot", line_color="purple",
+                         annotation_text=f"💉 {insulin['dose']}u")
     
     fig.update_layout(
         title="12-Hour Glucose Trend",
@@ -212,109 +240,26 @@ def create_glucose_chart():
     
     return fig
 
-def analyze_food_photo(image_file):
-    """Analyze food photo using Claude Vision API"""
-    try:
-        api_key = st.secrets.get("claude", {}).get("api_key")
-        if not api_key:
-            return {"error": "Claude API key not configured"}
-        
-        current_time = datetime.now()
-        if 'last_api_request' in st.session_state:
-            time_since_last = (current_time - st.session_state.last_api_request).total_seconds()
-            if time_since_last < 5:
-                return {"error": f"Please wait {5 - int(time_since_last)} more seconds"}
-        
-        if hasattr(image_file, 'read'):
-            image_bytes = image_file.read()
-        else:
-            image_bytes = image_file
-            
-        img = Image.open(io.BytesIO(image_bytes))
-        
-        max_size = 1024
-        if img.width > max_size or img.height > max_size:
-            img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-        
-        buffer = io.BytesIO()
-        img.save(buffer, format='JPEG', quality=85)
-        image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-        
-        client = anthropic.Anthropic(api_key=api_key)
-        st.session_state.last_api_request = current_time
-        
-        message = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=800,
-            temperature=0.1,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": image_base64
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": """Analyze this food photo for diabetes management. I need accurate carb estimates (within 5-10g) for insulin dosing.
-
-Please respond with ONLY a JSON object in this exact format:
-
-{
-    "foods": [
-        {
-            "name": "food_name",
-            "portion": "1 cup",
-            "carbs": 30,
-            "protein": 5,
-            "calories": 150
-        }
-    ],
-    "total_carbs": 30,
-    "total_protein": 5,
-    "total_calories": 150,
-    "notes": "cooking method, portion confidence, any relevant details"
-}
-
-Be conservative with portion estimates since this is for medical insulin dosing."""
-                        }
-                    ]
-                }
-            ]
-        )
-        
-        content = message.content[0].text
-        
-        import re
-        json_match = re.search(r'\{.*\}', content, re.DOTALL)
-        if json_match:
-            analysis = json.loads(json_match.group())
-            analysis['success'] = True
-            return analysis
-        else:
-            return {"error": "Could not parse Claude response"}
-            
-    except Exception as e:
-        return {"error": f"Analysis failed: {e}"}
-
+# Main app layout
 def main():
     st.title("🧠 Bean's Bolus Brain")
     st.subheader("AI-Powered Diabetes Management Dashboard")
     
+    # Get current data
     glucose_data = get_dexcom_data()
     current_iob = calculate_iob()
     
+    # NEW: Add predictive alerts
     prediction_engine = GlucosePredictionEngine()
     
-    if glucose_data and len(st.session_state.glucose_readings) >= 3:
-        recent_readings = st.session_state.glucose_readings[-6:]
-        prediction_results = prediction_engine.predict_glucose_trends(recent_readings, current_iob)
+    if glucose_data and len(st.session_state.glucose_readings) >= 2:
+        # Prepare data for prediction
+        recent_readings = st.session_state.glucose_readings[-6:]  # Last 6 readings
+        prediction_results = prediction_engine.predict_glucose_trends(
+            recent_readings, current_iob
+        )
         
+        # Display alerts prominently at the top
         if prediction_results['alerts']:
             st.markdown("## 🚨 GLUCOSE ALERTS")
             for alert in prediction_results['alerts']:
@@ -326,6 +271,7 @@ def main():
                     st.warning(f"**Recommendation:** {alert['recommendation']}")
             st.markdown("---")
         
+        # Display predictions
         if prediction_results['predictions']:
             st.markdown("## 📈 Glucose Predictions")
             
@@ -358,27 +304,34 @@ def main():
             
             st.markdown("---")
     
+    # Main dashboard layout
     col1, col2 = st.columns([2, 1])
     
     with col1:
+        # Current glucose status
         st.markdown("### 🩸 Current Glucose")
         display_glucose_status(glucose_data)
         
+        # IOB display (prominent)
         st.markdown("### 💉 Insulin on Board")
         iob_color = "orange" if current_iob > 3 else "green"
         st.markdown(f"<h2 style='text-align: center; color: {iob_color};'>{current_iob:.1f} units</h2>", 
                    unsafe_allow_html=True)
         
+        # Glucose chart
         chart = create_glucose_chart()
         if chart:
             st.plotly_chart(chart, use_container_width=True)
     
     with col2:
+        # Quick stats
         st.markdown("### 📊 Today's Summary")
         
         today = datetime.now(eastern).date()
-        today_meals = [m for m in st.session_state.meal_log if m['timestamp'].date() == today]
-        today_insulin = [i for i in st.session_state.insulin_log if i['timestamp'].date() == today and i['type'] == 'bolus']
+        today_meals = [m for m in st.session_state.meal_log 
+                      if m['timestamp'].date() == today]
+        today_insulin = [i for i in st.session_state.insulin_log 
+                        if i['timestamp'].date() == today and i['type'] == 'bolus']
         
         total_carbs = sum(meal['carbs'] for meal in today_meals)
         total_protein = sum(meal['protein'] for meal in today_meals)
@@ -388,16 +341,21 @@ def main():
         st.metric("Total Protein", f"{total_protein}g")
         st.metric("Total Bolus", f"{total_insulin:.1f}u")
         
+        # Calculate time in range if we have glucose data
         if st.session_state.glucose_readings:
-            today_glucose = [g for g in st.session_state.glucose_readings if g['timestamp'].date() == today]
+            today_glucose = [g for g in st.session_state.glucose_readings 
+                           if g['timestamp'].date() == today]
             if today_glucose:
-                in_range = sum(1 for g in today_glucose if GLUCOSE_RANGE[0] <= g['value'] <= GLUCOSE_RANGE[1])
+                in_range = sum(1 for g in today_glucose 
+                             if GLUCOSE_RANGE[0] <= g['value'] <= GLUCOSE_RANGE[1])
                 time_in_range = (in_range / len(today_glucose)) * 100
                 st.metric("Time in Range", f"{time_in_range:.0f}%")
     
+    # Sidebar for logging
     with st.sidebar:
         st.header("📝 Quick Logging")
         
+        # Manual glucose entry
         with st.expander("🩸 Manual Glucose Entry"):
             manual_glucose = st.number_input("Glucose (mg/dL)", min_value=40, max_value=400, value=120)
             if st.button("Log Glucose"):
@@ -411,6 +369,7 @@ def main():
                 st.success(f"Logged {manual_glucose} mg/dL")
                 st.rerun()
         
+        # Bolus logging
         with st.expander("💉 Log Bolus"):
             bolus_dose = st.number_input("Bolus dose (units)", min_value=0.0, max_value=20.0, step=0.5)
             bolus_notes = st.text_input("Notes (optional)")
@@ -419,66 +378,28 @@ def main():
                 st.success(f"Logged {bolus_dose}u bolus")
                 st.rerun()
         
+        # Basal logging
         with st.expander("🔄 Log Basal"):
-            basal_dose = st.number_input("Daily basal (units)", min_value=0.0, max_value=50.0, value=float(st.session_state.basal_dose), step=1.0)
+            basal_dose = st.number_input("Daily basal (units)", 
+                                       min_value=0.0, max_value=50.0, 
+                                       value=float(st.session_state.basal_dose), step=1.0)
             if st.button("Update Basal"):
                 st.session_state.basal_dose = basal_dose
                 add_insulin_entry(basal_dose, 'basal', f"Daily basal: {basal_dose}u")
                 st.success(f"Updated daily basal to {basal_dose}u")
                 st.rerun()
         
+        # Meal logging with bolus suggestion
         with st.expander("🍽️ Log Meal & Get Bolus Suggestion"):
-            st.markdown("**📸 Photo Analysis with Claude AI**")
-            uploaded_file = st.file_uploader("Take/upload photo of your meal", type=['png', 'jpg', 'jpeg'])
-            
-            if uploaded_file:
-                col1, col2 = st.columns([1, 1])
-                with col1:
-                    if st.button("🤖 Analyze Photo"):
-                        with st.spinner("Claude is analyzing your meal..."):
-                            analysis = analyze_food_photo(uploaded_file)
-                            if analysis.get('success'):
-                                st.success("✅ Analysis complete!")
-                                st.session_state.photo_analysis = analysis
-                            else:
-                                st.error(f"❌ {analysis.get('error', 'Analysis failed')}")
-                with col2:
-                    st.image(uploaded_file, width=150)
-            
-            if 'photo_analysis' in st.session_state and st.session_state.photo_analysis.get('success'):
-                analysis = st.session_state.photo_analysis
-                st.markdown("**🤖 Claude Analysis:**")
-                
-                for food in analysis.get('foods', []):
-                    st.write(f"• {food['name']} ({food['portion']}): {food['carbs']}g carbs")
-                
-                suggested_carbs = analysis.get('total_carbs', 30)
-                suggested_protein = analysis.get('total_protein', 0)
-                suggested_calories = analysis.get('total_calories', 0)
-                
-                if analysis.get('notes'):
-                    st.info(f"**Notes:** {analysis['notes']}")
-                
-                if st.button("✅ Use Claude Analysis"):
-                    st.session_state.ai_carbs = suggested_carbs
-                    st.session_state.ai_protein = suggested_protein
-                    st.session_state.ai_calories = suggested_calories
-                    st.success("Claude analysis applied!")
-            
-            st.markdown("---")
-            st.markdown("**📝 Manual Entry**")
-            
-            default_carbs = st.session_state.get('ai_carbs', 30)
-            default_protein = st.session_state.get('ai_protein', 0)
-            default_calories = st.session_state.get('ai_calories', 0)
-            
-            meal_carbs = st.number_input("Carbs (g)", min_value=0, max_value=200, value=int(default_carbs))
-            meal_protein = st.number_input("Protein (g)", min_value=0, max_value=100, value=int(default_protein))
-            meal_calories = st.number_input("Calories", min_value=0, max_value=2000, value=int(default_calories))
-            meal_description = st.text_input("Meal description", value="Claude Photo Analysis" if 'photo_analysis' in st.session_state else "")
+            meal_carbs = st.number_input("Carbs (g)", min_value=0, max_value=200, value=30)
+            meal_protein = st.number_input("Protein (g)", min_value=0, max_value=100, value=0)
+            meal_calories = st.number_input("Calories", min_value=0, max_value=2000, value=0)
+            meal_description = st.text_input("Meal description")
             
             if glucose_data:
-                bolus_suggestion = calculate_bolus_suggestion(meal_carbs, meal_protein, glucose_data['value'], current_iob)
+                bolus_suggestion = calculate_bolus_suggestion(
+                    meal_carbs, meal_protein, glucose_data['value'], current_iob
+                )
                 
                 st.markdown("**Bolus Suggestion:**")
                 st.write(f"• Carb bolus: {bolus_suggestion['carb_bolus']}u")
@@ -498,7 +419,8 @@ def main():
                 with col2:
                     if st.button("Log Meal + Bolus"):
                         add_meal_entry(meal_carbs, meal_protein, meal_calories, meal_description)
-                        add_insulin_entry(bolus_suggestion['total_bolus'], 'bolus', f"Meal bolus: {meal_description}")
+                        add_insulin_entry(bolus_suggestion['total_bolus'], 'bolus', 
+                                        f"Meal bolus: {meal_description}")
                         st.success(f"Logged meal + {bolus_suggestion['total_bolus']}u bolus!")
                         st.rerun()
             else:
@@ -507,6 +429,7 @@ def main():
                     st.success("Meal logged!")
                     st.rerun()
         
+        # Correction suggestion
         if glucose_data and glucose_data['value'] > 130:
             st.markdown("### 🎯 Correction Suggestion")
             correction_bolus = max(0, (glucose_data['value'] - TARGET_GLUCOSE) / CORRECTION_FACTOR - current_iob)
@@ -520,6 +443,7 @@ def main():
             else:
                 st.info("No correction needed (IOB sufficient)")
     
+    # Data tables in expandable sections
     st.markdown("---")
     
     tab1, tab2, tab3 = st.tabs(["📈 Glucose History", "💉 Insulin History", "🍽️ Meal History"])
