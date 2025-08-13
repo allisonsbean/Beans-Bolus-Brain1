@@ -1,0 +1,36 @@
+{
+  "glucose_readings": [
+    {
+      "value": 123,
+      "trend": "steady",
+      "trend_arrow": "\u2192",
+      "timestamp": "2025-08-13T09:46:00-04:00"
+    },
+    {
+      "value": 123,
+      "trend": "steady",
+      "trend_arrow": "\u2192",
+      "timestamp": "2025-08-13T09:51:00-04:00"
+    },
+    {
+      "value": 124,
+      "trend": "steady",
+      "trend_arrow": "\u2192",
+      "timestamp": "2025-08-13T10:06:00-04:00"
+    },
+    {
+      "value": 124,
+      "trend": "steady",
+      "trend_arrow": "\u2192",
+      "timestamp": "2025-08-13T10:16:00-04:00"
+    },
+    {
+      "value": 120,
+      "trend": "Manual Entry",
+      "trend_arrow": "",
+      "timestamp": "2025-08-13T15:50:15.150684-04:00"
+    }
+  ],
+  "insulin_log": [],
+  "meal_log": []
+}
