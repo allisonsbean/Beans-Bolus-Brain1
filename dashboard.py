@@ -31,6 +31,8 @@ if 'meal_log' not in st.session_state:
     st.session_state.meal_log = []
 if 'basal_dose' not in st.session_state:
     st.session_state.basal_dose = 19
+if 'daily_calorie_goal' not in st.session_state:
+    st.session_state.daily_calorie_goal = 1200
 
 # Diabetes settings
 CARB_RATIO = 12
@@ -261,7 +263,7 @@ def analyze_food_photo(image_file):
                         },
                         {
                             "type": "text",
-                            "text": """Analyze this food photo for diabetes management. I need accurate carb estimates (within 5-10g) for insulin dosing.
+                            "text": """Analyze this food photo for diabetes management and calorie tracking. I need accurate estimates for insulin dosing and staying within my 1200 calorie daily goal.
 
 Please respond with ONLY a JSON object in this exact format:
 
@@ -278,10 +280,10 @@ Please respond with ONLY a JSON object in this exact format:
     "total_carbs": 30,
     "total_protein": 5,
     "total_calories": 150,
-    "notes": "cooking method, portion confidence, any relevant details"
+    "notes": "cooking method, portion confidence, calorie density notes"
 }
 
-Be conservative with portion estimates since this is for medical insulin dosing."""
+Be conservative with portions since this is for medical insulin dosing and calorie tracking."""
                         }
                     ]
                 }
@@ -302,6 +304,36 @@ Be conservative with portion estimates since this is for medical insulin dosing.
     except Exception as e:
         return {"error": f"Analysis failed: {e}"}
 
+def run_basic_pattern_analysis():
+    """Simplified pattern analysis"""
+    if len(st.session_state.glucose_readings) < 10:
+        return "Need at least 10 glucose readings for pattern analysis"
+    
+    df = pd.DataFrame(st.session_state.glucose_readings)
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df['hour'] = df['timestamp'].dt.hour
+    df['in_range'] = ((df['value'] >= 80) & (df['value'] <= 130))
+    
+    insights = []
+    
+    # Time in range analysis
+    tir = df['in_range'].mean()
+    if tir < 0.7:
+        insights.append(f"⚠️ Time in range is {tir*100:.0f}% - target is 70%+")
+    else:
+        insights.append(f"🎉 Great time in range: {tir*100:.0f}%!")
+    
+    # Meal and calorie analysis
+    if st.session_state.meal_log:
+        meal_df = pd.DataFrame(st.session_state.meal_log)
+        total_days = max(1, (meal_df['timestamp'].max() - meal_df['timestamp'].min()).days + 1)
+        avg_daily_calories = meal_df['calories'].sum() / total_days
+        
+        if avg_daily_calories > 0:
+            insights.append(f"🔥 Average daily calories: {avg_daily_calories:.0f} (Goal: {st.session_state.daily_calorie_goal})")
+    
+    return insights
+
 def main():
     st.title("🧠 Bean's Bolus Brain")
     st.subheader("AI-Powered Diabetes Management Dashboard")
@@ -309,6 +341,7 @@ def main():
     glucose_data = get_dexcom_data()
     current_iob = calculate_iob()
     
+    # Predictive alerts
     prediction_engine = GlucosePredictionEngine()
     
     if glucose_data and len(st.session_state.glucose_readings) >= 3:
@@ -382,11 +415,23 @@ def main():
         
         total_carbs = sum(meal['carbs'] for meal in today_meals)
         total_protein = sum(meal['protein'] for meal in today_meals)
+        total_calories = sum(meal['calories'] for meal in today_meals)
         total_insulin = sum(insulin['dose'] for insulin in today_insulin)
         
         st.metric("Total Carbs", f"{total_carbs}g")
         st.metric("Total Protein", f"{total_protein}g")
+        st.metric("Total Calories", f"{total_calories}")
         st.metric("Total Bolus", f"{total_insulin:.1f}u")
+        
+        # Calorie progress
+        progress_percent = min(1.0, total_calories / st.session_state.daily_calorie_goal)
+        st.progress(progress_percent)
+        
+        remaining_cals = st.session_state.daily_calorie_goal - total_calories
+        if remaining_cals > 0:
+            st.success(f"🎯 {remaining_cals} calories remaining today")
+        else:
+            st.warning(f"⚠️ {abs(remaining_cals)} calories over goal today")
         
         if st.session_state.glucose_readings:
             today_glucose = [g for g in st.session_state.glucose_readings if g['timestamp'].date() == today]
@@ -397,6 +442,15 @@ def main():
     
     with st.sidebar:
         st.header("📝 Quick Logging")
+        
+        with st.expander("🎯 Daily Goals"):
+            new_calorie_goal = st.number_input("Daily Calorie Goal", 
+                                             min_value=800, max_value=3000, 
+                                             value=st.session_state.daily_calorie_goal, step=50)
+            if st.button("Update Calorie Goal"):
+                st.session_state.daily_calorie_goal = new_calorie_goal
+                st.success(f"Updated daily calorie goal to {new_calorie_goal}")
+                st.rerun()
         
         with st.expander("🩸 Manual Glucose Entry"):
             manual_glucose = st.number_input("Glucose (mg/dL)", min_value=40, max_value=400, value=120)
@@ -450,7 +504,7 @@ def main():
                 st.markdown("**🤖 Claude Analysis:**")
                 
                 for food in analysis.get('foods', []):
-                    st.write(f"• {food['name']} ({food['portion']}): {food['carbs']}g carbs")
+                    st.write(f"• {food['name']} ({food['portion']}): {food['carbs']}g carbs, {food['calories']} cal")
                 
                 suggested_carbs = analysis.get('total_carbs', 30)
                 suggested_protein = analysis.get('total_protein', 0)
@@ -520,7 +574,19 @@ def main():
             else:
                 st.info("No correction needed (IOB sufficient)")
     
+    # Pattern analysis
     st.markdown("---")
+    
+    if st.button("🧠 Analyze My Patterns"):
+        with st.spinner("Analyzing your diabetes patterns..."):
+            insights = run_basic_pattern_analysis()
+            
+            if isinstance(insights, str):
+                st.warning(insights)
+            else:
+                st.markdown("### 🔍 AI Pattern Insights")
+                for insight in insights:
+                    st.info(insight)
     
     tab1, tab2, tab3 = st.tabs(["📈 Glucose History", "💉 Insulin History", "🍽️ Meal History"])
     
