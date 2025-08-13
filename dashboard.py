@@ -26,7 +26,7 @@ if 'insulin_log' not in st.session_state:
 if 'meal_log' not in st.session_state:
     st.session_state.meal_log = []
 if 'basal_dose' not in st.session_state:
-    st.session_state.basal_dose = 20
+    st.session_state.basal_dose = 19
 
 # Diabetes settings
 CARB_RATIO = 12  # 1 unit per 12g carbs
@@ -43,12 +43,15 @@ eastern = pytz.timezone('US/Eastern')
 def get_dexcom_data():
     """Get real-time glucose data from Dexcom Share"""
     try:
+        # Use direct credentials for local development
         dexcom = Dexcom(username="allisonsbean@gmail.com", password="Allison9")
         glucose_value = dexcom.get_current_glucose_reading()
         
         if glucose_value:
+            # Use the 'datetime' attribute
             timestamp = glucose_value.datetime
             
+            # Convert to Eastern time
             if timestamp.tzinfo is None:
                 timestamp = eastern.localize(timestamp)
             else:
@@ -61,6 +64,7 @@ def get_dexcom_data():
                 'timestamp': timestamp
             }
             
+            # Add to session state if not duplicate
             if not st.session_state.glucose_readings or \
                st.session_state.glucose_readings[-1]['timestamp'] != glucose_data['timestamp']:
                 st.session_state.glucose_readings.append(glucose_data)
@@ -147,6 +151,7 @@ def display_glucose_status(glucose_data):
     trend = glucose_data.get('trend', 'Unknown')
     arrow = glucose_data.get('trend_arrow', '')
     
+    # Determine status and color
     if value < 70:
         status = "🔴 URGENT LOW"
         color = "red"
@@ -169,21 +174,25 @@ def display_glucose_status(glucose_data):
     st.markdown(f"<p style='text-align: center;'>Trend: {trend}</p>", unsafe_allow_html=True)
 
 def create_glucose_chart():
-    """Create glucose trend chart - simplified version without markers"""
+    """Create glucose trend chart with meal and insulin markers"""
     if not st.session_state.glucose_readings:
         return None
     
+    # Convert to DataFrame
     df_glucose = pd.DataFrame(st.session_state.glucose_readings)
     df_glucose['timestamp'] = pd.to_datetime(df_glucose['timestamp'])
     
+    # Filter to last 12 hours
     cutoff_time = datetime.now(eastern) - timedelta(hours=12)
     df_glucose = df_glucose[df_glucose['timestamp'] >= cutoff_time]
     
     if df_glucose.empty:
         return None
     
+    # Create the chart
     fig = go.Figure()
     
+    # Add glucose line
     fig.add_trace(go.Scatter(
         x=df_glucose['timestamp'],
         y=df_glucose['value'],
@@ -193,8 +202,33 @@ def create_glucose_chart():
         marker=dict(size=6)
     ))
     
+    # Add target range
     fig.add_hline(y=80, line_dash="dash", line_color="green", annotation_text="Target Range")
     fig.add_hline(y=130, line_dash="dash", line_color="green")
+    
+    # Add meal markers
+    for meal in st.session_state.meal_log:
+        meal_time = meal['timestamp']
+        if isinstance(meal_time, str):
+            meal_time = datetime.fromisoformat(meal_time).replace(tzinfo=eastern)
+        elif not hasattr(meal_time, 'tzinfo') or meal_time.tzinfo is None:
+            meal_time = eastern.localize(meal_time)
+        
+        if meal_time >= cutoff_time:
+            fig.add_vline(x=meal_time, line_dash="dot", line_color="orange", 
+                         annotation_text=f"🍽️ {meal['carbs']}g")
+    
+    # Add insulin markers
+    for insulin in st.session_state.insulin_log:
+        insulin_time = insulin['timestamp']
+        if isinstance(insulin_time, str):
+            insulin_time = datetime.fromisoformat(insulin_time).replace(tzinfo=eastern)
+        elif not hasattr(insulin_time, 'tzinfo') or insulin_time.tzinfo is None:
+            insulin_time = eastern.localize(insulin_time)
+        
+        if insulin_time >= cutoff_time and insulin['type'] == 'bolus':
+            fig.add_vline(x=insulin_time, line_dash="dot", line_color="purple",
+                         annotation_text=f"💉 {insulin['dose']}u")
     
     fig.update_layout(
         title="12-Hour Glucose Trend",
@@ -206,22 +240,26 @@ def create_glucose_chart():
     
     return fig
 
+# Main app layout
 def main():
     st.title("🧠 Bean's Bolus Brain")
     st.subheader("AI-Powered Diabetes Management Dashboard")
     
+    # Get current data
     glucose_data = get_dexcom_data()
     current_iob = calculate_iob()
     
     # NEW: Add predictive alerts
     prediction_engine = GlucosePredictionEngine()
     
-    if glucose_data and len(st.session_state.glucose_readings) >= 3:
-        recent_readings = st.session_state.glucose_readings[-6:]
+    if glucose_data and len(st.session_state.glucose_readings) >= 2:
+        # Prepare data for prediction
+        recent_readings = st.session_state.glucose_readings[-6:]  # Last 6 readings
         prediction_results = prediction_engine.predict_glucose_trends(
             recent_readings, current_iob
         )
         
+        # Display alerts prominently at the top
         if prediction_results['alerts']:
             st.markdown("## 🚨 GLUCOSE ALERTS")
             for alert in prediction_results['alerts']:
@@ -233,6 +271,7 @@ def main():
                     st.warning(f"**Recommendation:** {alert['recommendation']}")
             st.markdown("---")
         
+        # Display predictions
         if prediction_results['predictions']:
             st.markdown("## 📈 Glucose Predictions")
             
@@ -265,27 +304,34 @@ def main():
             
             st.markdown("---")
     
+    # Main dashboard layout
     col1, col2 = st.columns([2, 1])
     
     with col1:
+        # Current glucose status
         st.markdown("### 🩸 Current Glucose")
         display_glucose_status(glucose_data)
         
+        # IOB display (prominent)
         st.markdown("### 💉 Insulin on Board")
         iob_color = "orange" if current_iob > 3 else "green"
         st.markdown(f"<h2 style='text-align: center; color: {iob_color};'>{current_iob:.1f} units</h2>", 
                    unsafe_allow_html=True)
         
+        # Glucose chart
         chart = create_glucose_chart()
         if chart:
             st.plotly_chart(chart, use_container_width=True)
     
     with col2:
+        # Quick stats
         st.markdown("### 📊 Today's Summary")
         
         today = datetime.now(eastern).date()
-        today_meals = [m for m in st.session_state.meal_log if m['timestamp'].date() == today]
-        today_insulin = [i for i in st.session_state.insulin_log if i['timestamp'].date() == today and i['type'] == 'bolus']
+        today_meals = [m for m in st.session_state.meal_log 
+                      if m['timestamp'].date() == today]
+        today_insulin = [i for i in st.session_state.insulin_log 
+                        if i['timestamp'].date() == today and i['type'] == 'bolus']
         
         total_carbs = sum(meal['carbs'] for meal in today_meals)
         total_protein = sum(meal['protein'] for meal in today_meals)
@@ -305,9 +351,11 @@ def main():
                 time_in_range = (in_range / len(today_glucose)) * 100
                 st.metric("Time in Range", f"{time_in_range:.0f}%")
     
+    # Sidebar for logging
     with st.sidebar:
         st.header("📝 Quick Logging")
         
+        # Manual glucose entry
         with st.expander("🩸 Manual Glucose Entry"):
             manual_glucose = st.number_input("Glucose (mg/dL)", min_value=40, max_value=400, value=120)
             if st.button("Log Glucose"):
@@ -321,6 +369,7 @@ def main():
                 st.success(f"Logged {manual_glucose} mg/dL")
                 st.rerun()
         
+        # Bolus logging
         with st.expander("💉 Log Bolus"):
             bolus_dose = st.number_input("Bolus dose (units)", min_value=0.0, max_value=20.0, step=0.5)
             bolus_notes = st.text_input("Notes (optional)")
@@ -329,6 +378,7 @@ def main():
                 st.success(f"Logged {bolus_dose}u bolus")
                 st.rerun()
         
+        # Basal logging
         with st.expander("🔄 Log Basal"):
             basal_dose = st.number_input("Daily basal (units)", 
                                        min_value=0.0, max_value=50.0, 
@@ -339,6 +389,7 @@ def main():
                 st.success(f"Updated daily basal to {basal_dose}u")
                 st.rerun()
         
+        # Meal logging with bolus suggestion
         with st.expander("🍽️ Log Meal & Get Bolus Suggestion"):
             meal_carbs = st.number_input("Carbs (g)", min_value=0, max_value=200, value=30)
             meal_protein = st.number_input("Protein (g)", min_value=0, max_value=100, value=0)
