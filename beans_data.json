@@ -25,12 +25,25 @@
       "timestamp": "2025-08-13T10:16:00-04:00"
     },
     {
-      "value": 120,
-      "trend": "Manual Entry",
-      "trend_arrow": "",
-      "timestamp": "2025-08-13T15:50:15.150684-04:00"
+      "value": 178,
+      "trend": "steady",
+      "trend_arrow": "\u2192",
+      "timestamp": "2025-08-13T23:16:00-04:00"
+    },
+    {
+      "value": 176,
+      "trend": "steady",
+      "trend_arrow": "\u2192",
+      "timestamp": "2025-08-13T23:26:01-04:00"
     }
   ],
-  "insulin_log": [],
+  "insulin_log": [
+    {
+      "timestamp": "2025-08-13T23:20:21.669305-04:00",
+      "type": "bolus",
+      "dose": 1,
+      "notes": "Correction bolus"
+    }
+  ],
   "meal_log": []
 }

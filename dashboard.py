@@ -497,29 +497,41 @@ def create_glucose_chart():
     fig.add_hline(y=80, line_dash="dash", line_color="green", annotation_text="Target Range")
     fig.add_hline(y=130, line_dash="dash", line_color="green")
     
-    # Add meal markers
-    for meal in st.session_state.meal_log:
-        meal_time = meal['timestamp']
-        if isinstance(meal_time, str):
-            meal_time = datetime.fromisoformat(meal_time).replace(tzinfo=eastern)
-        elif not hasattr(meal_time, 'tzinfo') or meal_time.tzinfo is None:
-            meal_time = eastern.localize(meal_time)
-        
-        if meal_time >= cutoff_time:
-            fig.add_vline(x=meal_time, line_dash="dot", line_color="orange", 
-                         annotation_text=f"🍽️ {meal['carbs']}g")
+    # Add meal markers - safer version
+    try:
+        for meal in st.session_state.meal_log:
+            meal_time = meal['timestamp']
+            if isinstance(meal_time, str):
+                meal_time = datetime.fromisoformat(meal_time)
+                if meal_time.tzinfo is None:
+                    meal_time = eastern.localize(meal_time)
+            elif meal_time.tzinfo is None:
+                meal_time = eastern.localize(meal_time)
+            
+            if meal_time >= cutoff_time:
+                carb_text = f"🍽️ {int(meal['carbs'])}g"
+                fig.add_vline(x=meal_time, line_dash="dot", line_color="orange", 
+                             annotation_text=carb_text)
+    except Exception as e:
+        st.warning(f"Could not add meal markers: {e}")
     
-    # Add insulin markers
-    for insulin in st.session_state.insulin_log:
-        insulin_time = insulin['timestamp']
-        if isinstance(insulin_time, str):
-            insulin_time = datetime.fromisoformat(insulin_time).replace(tzinfo=eastern)
-        elif not hasattr(insulin_time, 'tzinfo') or insulin_time.tzinfo is None:
-            insulin_time = eastern.localize(insulin_time)
-        
-        if insulin_time >= cutoff_time and insulin['type'] == 'bolus':
-            fig.add_vline(x=insulin_time, line_dash="dot", line_color="purple",
-                         annotation_text=f"💉 {insulin['dose']}u")
+    # Add insulin markers - safer version
+    try:
+        for insulin in st.session_state.insulin_log:
+            insulin_time = insulin['timestamp']
+            if isinstance(insulin_time, str):
+                insulin_time = datetime.fromisoformat(insulin_time)
+                if insulin_time.tzinfo is None:
+                    insulin_time = eastern.localize(insulin_time)
+            elif insulin_time.tzinfo is None:
+                insulin_time = eastern.localize(insulin_time)
+            
+            if insulin_time >= cutoff_time and insulin['type'] == 'bolus':
+                dose_text = f"💉 {float(insulin['dose'])}u"
+                fig.add_vline(x=insulin_time, line_dash="dot", line_color="purple",
+                             annotation_text=dose_text)
+    except Exception as e:
+        st.warning(f"Could not add insulin markers: {e}")
     
     fig.update_layout(
         title="12-Hour Glucose Trend",
@@ -852,44 +864,152 @@ def main():
                                     st.metric("Target Daily Calories", f"{avg_calories:.0f}", 
                                             help="Calorie intake on your best days")
     
-    # Data tables
+    # Data tables with delete functionality
     tab1, tab2, tab3 = st.tabs(["📈 Glucose History", "💉 Insulin History", "🍽️ Meal History"])
     
     with tab1:
         if st.session_state.glucose_readings:
-            glucose_df = pd.DataFrame(st.session_state.glucose_readings)
-            # Handle timestamp formatting safely
-            glucose_df['timestamp'] = glucose_df['timestamp'].apply(
-                lambda x: x.strftime('%m/%d %H:%M') if hasattr(x, 'strftime') else str(x)
-            )
-            st.dataframe(glucose_df[['timestamp', 'value', 'trend']].head(50), use_container_width=True)
-            st.write(f"Showing latest 50 of {len(st.session_state.glucose_readings)} total readings")
+            st.markdown("### 📈 Glucose Readings")
+            
+            # Show recent entries with delete buttons
+            for i, reading in enumerate(reversed(st.session_state.glucose_readings[-20:])):
+                actual_index = len(st.session_state.glucose_readings) - 1 - i
+                timestamp_str = reading['timestamp'].strftime('%m/%d %H:%M') if hasattr(reading['timestamp'], 'strftime') else str(reading['timestamp'])
+                
+                col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+                
+                with col1:
+                    st.write(f"**{timestamp_str}**")
+                with col2:
+                    st.write(f"{reading['value']} mg/dL")
+                with col3:
+                    st.write(f"{reading['trend']}")
+                with col4:
+                    if st.button("🗑️", key=f"del_glucose_{actual_index}", help="Delete this reading"):
+                        st.session_state.glucose_readings.pop(actual_index)
+                        save_data_to_file()
+                        st.success("Glucose reading deleted!")
+                        st.rerun()
+            
+            st.write(f"Showing latest 20 of {len(st.session_state.glucose_readings)} total readings")
+            
+            if len(st.session_state.glucose_readings) > 20:
+                with st.expander("📊 Full Data Table"):
+                    glucose_df = pd.DataFrame(st.session_state.glucose_readings)
+                    glucose_df['timestamp'] = glucose_df['timestamp'].apply(
+                        lambda x: x.strftime('%m/%d %H:%M') if hasattr(x, 'strftime') else str(x)
+                    )
+                    st.dataframe(glucose_df[['timestamp', 'value', 'trend']], use_container_width=True)
         else:
             st.info("No glucose readings yet")
     
     with tab2:
         if st.session_state.insulin_log:
-            insulin_df = pd.DataFrame(st.session_state.insulin_log)
-            # Handle timestamp formatting safely
-            insulin_df['timestamp'] = insulin_df['timestamp'].apply(
-                lambda x: x.strftime('%m/%d %H:%M') if hasattr(x, 'strftime') else str(x)
-            )
-            st.dataframe(insulin_df[['timestamp', 'type', 'dose', 'notes']].head(50), use_container_width=True)
-            st.write(f"Showing latest 50 of {len(st.session_state.insulin_log)} total entries")
+            st.markdown("### 💉 Insulin Entries")
+            
+            # Show recent entries with delete buttons
+            for i, entry in enumerate(reversed(st.session_state.insulin_log[-20:])):
+                actual_index = len(st.session_state.insulin_log) - 1 - i
+                timestamp_str = entry['timestamp'].strftime('%m/%d %H:%M') if hasattr(entry['timestamp'], 'strftime') else str(entry['timestamp'])
+                
+                col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 2, 1])
+                
+                with col1:
+                    st.write(f"**{timestamp_str}**")
+                with col2:
+                    st.write(f"{entry['type']}")
+                with col3:
+                    st.write(f"{entry['dose']}u")
+                with col4:
+                    st.write(f"{entry['notes'][:20]}..." if len(entry['notes']) > 20 else entry['notes'])
+                with col5:
+                    if st.button("🗑️", key=f"del_insulin_{actual_index}", help="Delete this entry"):
+                        st.session_state.insulin_log.pop(actual_index)
+                        save_data_to_file()
+                        st.success("Insulin entry deleted!")
+                        st.rerun()
+            
+            st.write(f"Showing latest 20 of {len(st.session_state.insulin_log)} total entries")
+            
+            if len(st.session_state.insulin_log) > 20:
+                with st.expander("📊 Full Data Table"):
+                    insulin_df = pd.DataFrame(st.session_state.insulin_log)
+                    insulin_df['timestamp'] = insulin_df['timestamp'].apply(
+                        lambda x: x.strftime('%m/%d %H:%M') if hasattr(x, 'strftime') else str(x)
+                    )
+                    st.dataframe(insulin_df[['timestamp', 'type', 'dose', 'notes']], use_container_width=True)
         else:
             st.info("No insulin entries yet")
     
     with tab3:
         if st.session_state.meal_log:
-            meal_df = pd.DataFrame(st.session_state.meal_log)
-            # Handle timestamp formatting safely
-            meal_df['timestamp'] = meal_df['timestamp'].apply(
-                lambda x: x.strftime('%m/%d %H:%M') if hasattr(x, 'strftime') else str(x)
-            )
-            st.dataframe(meal_df[['timestamp', 'carbs', 'protein', 'calories', 'description']].head(50), use_container_width=True)
-            st.write(f"Showing latest 50 of {len(st.session_state.meal_log)} total meals")
+            st.markdown("### 🍽️ Meal Entries")
+            
+            # Show recent entries with delete buttons
+            for i, meal in enumerate(reversed(st.session_state.meal_log[-20:])):
+                actual_index = len(st.session_state.meal_log) - 1 - i
+                timestamp_str = meal['timestamp'].strftime('%m/%d %H:%M') if hasattr(meal['timestamp'], 'strftime') else str(meal['timestamp'])
+                
+                col1, col2, col3, col4, col5, col6 = st.columns([3, 1, 1, 1, 2, 1])
+                
+                with col1:
+                    st.write(f"**{timestamp_str}**")
+                with col2:
+                    st.write(f"{meal['carbs']}g")
+                with col3:
+                    st.write(f"{meal['protein']}g")
+                with col4:
+                    st.write(f"{meal['calories']}")
+                with col5:
+                    st.write(f"{meal['description'][:15]}..." if len(meal['description']) > 15 else meal['description'])
+                with col6:
+                    if st.button("🗑️", key=f"del_meal_{actual_index}", help="Delete this meal"):
+                        st.session_state.meal_log.pop(actual_index)
+                        save_data_to_file()
+                        st.success("Meal entry deleted!")
+                        st.rerun()
+            
+            st.write(f"Showing latest 20 of {len(st.session_state.meal_log)} total meals")
+            
+            if len(st.session_state.meal_log) > 20:
+                with st.expander("📊 Full Data Table"):
+                    meal_df = pd.DataFrame(st.session_state.meal_log)
+                    meal_df['timestamp'] = meal_df['timestamp'].apply(
+                        lambda x: x.strftime('%m/%d %H:%M') if hasattr(x, 'strftime') else str(x)
+                    )
+                    st.dataframe(meal_df[['timestamp', 'carbs', 'protein', 'calories', 'description']], use_container_width=True)
         else:
             st.info("No meal entries yet")
+    
+    # Bulk delete options
+    st.markdown("---")
+    st.markdown("### 🗑️ Bulk Delete Options")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.session_state.glucose_readings and st.button("Clear All Glucose Data", type="secondary"):
+            if st.checkbox("⚠️ Confirm glucose data deletion"):
+                st.session_state.glucose_readings = []
+                save_data_to_file()
+                st.success("All glucose data cleared!")
+                st.rerun()
+    
+    with col2:
+        if st.session_state.insulin_log and st.button("Clear All Insulin Data", type="secondary"):
+            if st.checkbox("⚠️ Confirm insulin data deletion"):
+                st.session_state.insulin_log = []
+                save_data_to_file()
+                st.success("All insulin data cleared!")
+                st.rerun()
+    
+    with col3:
+        if st.session_state.meal_log and st.button("Clear All Meal Data", type="secondary"):
+            if st.checkbox("⚠️ Confirm meal data deletion"):
+                st.session_state.meal_log = []
+                save_data_to_file()
+                st.success("All meal data cleared!")
+                st.rerun()
 
 if __name__ == "__main__":
     main()
