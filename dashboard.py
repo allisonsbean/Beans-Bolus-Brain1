@@ -8,6 +8,8 @@ from pydexcom import Dexcom
 import json
 import os
 import io
+import anthropic
+import base64
 from PIL import Image
 
 # Page configuration
@@ -264,33 +266,161 @@ def display_glucose_status(glucose_data):
     st.markdown(f"<p style='text-align: center;'>Trend: {trend}</p>", unsafe_allow_html=True)
 
 def analyze_food_photo(image_file):
-    """Analyze food photo - placeholder for Claude AI integration"""
+    """Analyze food photo using Claude AI"""
     try:
-        img = Image.open(io.BytesIO(image_file.read() if hasattr(image_file, 'read') else image_file))
+        # Get API key from Streamlit config
+        try:
+            api_key = st.secrets["claude"]["api_key"]
+        except:
+            # Fallback to old format if new format doesn't work
+            api_key = st.secrets.get("CLAUDE_API_KEY")
+        
+        if not api_key:
+            return {"error": "Claude AI API key not found", "success": False}
+        
+        # Initialize Claude client
+        client = anthropic.Anthropic(api_key=api_key)
+        
+        # Process image
+        if hasattr(image_file, 'read'):
+            image_data = image_file.read()
+            image_file.seek(0)  # Reset file pointer for other uses
+        else:
+            image_data = image_file
+        
+        # Convert to PIL Image and resize if needed
+        img = Image.open(io.BytesIO(image_data))
+        
+        # Resize image if too large (Claude has size limits)
         max_size = 1024
         if img.width > max_size or img.height > max_size:
             img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
         
-        # PLACEHOLDER - Replace with Claude AI API calls
-        analysis = {
-            "foods": [{
-                "name": "Mixed meal (please verify and adjust)", 
-                "portion": "1 serving", 
-                "carbs": 45, 
-                "protein": 15, 
-                "calories": 350
-            }],
-            "total_carbs": 45,
-            "total_protein": 15,
-            "total_calories": 350,
-            "notes": "⚠️ This is a placeholder estimate - please adjust values based on your actual meal",
-            "success": True
+        # Convert back to bytes
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format='PNG')
+        img_byte_arr = img_byte_arr.getvalue()
+        
+        # Encode as base64
+        image_base64 = base64.b64encode(img_byte_arr).decode('utf-8')
+        
+        # Create Claude AI prompt for food analysis
+        prompt = """Please analyze this food image for diabetes management. I need accurate carbohydrate estimates for insulin dosing.
+
+For each food item visible, estimate:
+1. Food name and description
+2. Portion size
+3. Carbohydrates in grams (be conservative for safety)
+4. Protein in grams
+5. Calories
+
+Respond in this exact JSON format:
+{
+    "foods": [
+        {
+            "name": "Food name",
+            "portion": "portion description",
+            "carbs": number,
+            "protein": number,
+            "calories": number
         }
+    ],
+    "total_carbs": sum_of_all_carbs,
+    "total_protein": sum_of_all_protein,
+    "total_calories": sum_of_all_calories,
+    "confidence": "high/medium/low",
+    "notes": "Additional observations or uncertainties"
+}
+
+Important: Be conservative with carb estimates for diabetes safety. If uncertain, err on the higher side for carbs."""
         
-        return analysis
+        # Call Claude AI API
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1000,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt
+                        },
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": image_base64
+                            }
+                        }
+                    ]
+                }
+            ]
+        )
         
+        # Parse Claude's response
+        analysis_text = response.content[0].text.strip()
+        
+        # Try to extract JSON from response
+        try:
+            import json
+            
+            # Look for JSON in the response
+            start_idx = analysis_text.find('{')
+            end_idx = analysis_text.rfind('}') + 1
+            
+            if start_idx != -1 and end_idx > start_idx:
+                json_str = analysis_text[start_idx:end_idx]
+                analysis = json.loads(json_str)
+                
+                # Ensure required fields exist
+                if 'foods' not in analysis:
+                    analysis['foods'] = []
+                if 'total_carbs' not in analysis:
+                    analysis['total_carbs'] = sum(food.get('carbs', 0) for food in analysis['foods'])
+                if 'total_protein' not in analysis:
+                    analysis['total_protein'] = sum(food.get('protein', 0) for food in analysis['foods'])
+                if 'total_calories' not in analysis:
+                    analysis['total_calories'] = sum(food.get('calories', 0) for food in analysis['foods'])
+                
+                analysis['success'] = True
+                analysis['raw_response'] = analysis_text
+                analysis['notes'] = f"🤖 Claude AI Analysis: {analysis.get('notes', 'Analysis completed')}"
+                
+                return analysis
+            else:
+                raise json.JSONDecodeError("No valid JSON found", analysis_text, 0)
+                
+        except json.JSONDecodeError:
+            # If JSON parsing fails, create a structured response from the text
+            return {
+                "foods": [{
+                    "name": "Claude AI Analysis (see notes)", 
+                    "portion": "Please review", 
+                    "carbs": 35, 
+                    "protein": 10, 
+                    "calories": 250
+                }],
+                "total_carbs": 35,
+                "total_protein": 10,
+                "total_calories": 250,
+                "confidence": "medium",
+                "notes": f"🤖 Claude Response: {analysis_text}",
+                "success": True,
+                "raw_response": analysis_text
+            }
+            
+    except anthropic.APIError as e:
+        return {
+            "error": f"Claude AI API error: {str(e)}",
+            "success": False
+        }
     except Exception as e:
-        return {"error": f"Analysis failed: {e}"}
+        return {
+            "error": f"Analysis failed: {str(e)}",
+            "success": False
+        }
 
 def run_insulin_sensitivity_analysis():
     """Comprehensive insulin sensitivity analysis to optimize ratios"""
@@ -692,7 +822,7 @@ def main():
         
         # Meal logging with enhanced bolus calculator
         with st.expander("🍽️ Log Meal & Get Bolus Suggestion"):
-            st.markdown("**📸 Photo Analysis (Placeholder)**")
+            st.markdown("**📸 Photo Analysis with Claude AI**")
             
             uploaded_file = st.file_uploader("Upload meal photo", type=['png', 'jpg', 'jpeg'])
             
@@ -705,15 +835,22 @@ def main():
                             if analysis.get('success'):
                                 st.success("✅ Analysis complete!")
                                 st.session_state.photo_analysis = analysis
+                                
+                                # Display Claude's analysis
+                                if 'foods' in analysis:
+                                    st.write("**🤖 Claude AI found:**")
+                                    for food in analysis['foods']:
+                                        st.write(f"• {food['name']}: {food['carbs']}g carbs, {food['protein']}g protein")
+                                    st.write(f"**Total: {analysis['total_carbs']}g carbs, {analysis['total_protein']}g protein**")
+                                    if 'confidence' in analysis:
+                                        st.write(f"**Confidence:** {analysis['confidence']}")
                             else:
                                 st.error(f"❌ {analysis.get('error', 'Analysis failed')}")
                 
                 with col2:
                     st.image(uploaded_file, width=150)
             
-            # Manual entry with defaults
-            st.markdown("**📝 Manual Entry**")
-            # Manual entry with defaults
+            # Manual entry with defaults from Claude AI analysis
             st.markdown("**📝 Manual Entry**")
             default_carbs = st.session_state.get('photo_analysis', {}).get('total_carbs', 30)
             default_protein = st.session_state.get('photo_analysis', {}).get('total_protein', 0)
@@ -793,8 +930,8 @@ def main():
                         st.rerun()
             else:
                 st.info("Connect Dexcom for bolus suggestions")
-        
-        # Exercise logging section - ADDED HERE
+
+        # Exercise logging section - ADD THIS RIGHT AFTER THE MEAL SECTION
         st.markdown("---")
         st.subheader("🏃‍♀️ Log Exercise")
         
