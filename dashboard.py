@@ -12,6 +12,30 @@ import anthropic
 import base64
 from PIL import Image
 
+def delete_entry(entry_type, index):
+    """Delete an entry from the specified log"""
+    if entry_type == 'glucose':
+        if 0 <= index < len(st.session_state.glucose_readings):
+            deleted_entry = st.session_state.glucose_readings.pop(index)
+            st.success(f"Deleted glucose reading: {deleted_entry['value']} mg/dL at {deleted_entry['timestamp'].strftime('%I:%M %p')}")
+    elif entry_type == 'insulin':
+        if 0 <= index < len(st.session_state.insulin_log):
+            deleted_entry = st.session_state.insulin_log.pop(index)
+            st.success(f"Deleted insulin: {deleted_entry['dose']} units ({deleted_entry['type']}) at {deleted_entry['timestamp'].strftime('%I:%M %p')}")
+    elif entry_type == 'meal':
+        if 0 <= index < len(st.session_state.meal_log):
+            deleted_entry = st.session_state.meal_log.pop(index)
+            st.success(f"Deleted meal: {deleted_entry.get('description', 'Unknown')} at {deleted_entry['timestamp'].strftime('%I:%M %p')}")
+    elif entry_type == 'exercise':
+        if 0 <= index < len(st.session_state.exercise_log):
+            deleted_entry = st.session_state.exercise_log.pop(index)
+            st.success(f"Deleted exercise: {deleted_entry['type']} at {deleted_entry['timestamp'].strftime('%I:%M %p')}")
+    
+    # Save data after deletion
+    save_data_to_file()
+    # Force page refresh
+    st.rerun()
+    
 # Page configuration
 st.set_page_config(
     page_title="Bean's Bolus Brain 🧠",
@@ -820,6 +844,33 @@ def main():
                 st.success(f"Logged {bolus_dose}u bolus")
                 st.rerun()
         
+        # Basal logging
+        with st.expander("🕐 Log Basal"):
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                basal_dose = st.number_input("Basal dose (units)", min_value=0.0, max_value=30.0, step=0.5, value=float(st.session_state.basal_dose))
+                basal_notes = st.text_input("Basal notes (optional)", key="basal_notes_input")
+            with col2:
+                basal_date = st.date_input("Date", value=current_date, key="basal_date")
+                basal_time = st.time_input("Time", value=current_time, key="basal_time")
+            
+            if st.button("Log Basal"):
+                basal_datetime = datetime.combine(basal_date, basal_time)
+                basal_datetime = eastern.localize(basal_datetime)
+                
+                entry = {
+                    'timestamp': basal_datetime,
+                    'type': 'basal',
+                    'dose': basal_dose,
+                    'notes': basal_notes
+                }
+                st.session_state.insulin_log.append(entry)
+                st.session_state.insulin_log.sort(key=lambda x: x['timestamp'])
+                st.session_state.basal_dose = basal_dose  # Remember for next time
+                save_data_to_file()
+                st.success(f"Logged {basal_dose}u basal")
+                st.rerun()
+
         # Meal logging with enhanced bolus calculator
         with st.expander("🍽️ Log Meal & Get Bolus Suggestion"):
             st.markdown("**📸 Photo Analysis with Claude AI**")
@@ -931,11 +982,8 @@ def main():
             else:
                 st.info("Connect Dexcom for bolus suggestions")
 
-        # Exercise logging section - ADD THIS RIGHT AFTER THE MEAL SECTION
-        st.markdown("---")
-        st.subheader("🏃‍♀️ Log Exercise")
-        
-        with st.expander("💪 Exercise Entry", expanded=False):
+        # Exercise logging section
+        with st.expander("🏃‍♀️ Log Exercise"):
             # Exercise type selection
             exercise_type = st.selectbox(
                 "Exercise Type:",
@@ -1172,55 +1220,170 @@ def main():
                     else:
                         st.info("🍽️ Log more meals for detailed meal analysis")
     
-    # Enhanced data tables
+    # Enhanced data tables with delete functionality
     st.markdown("---")
     tab1, tab2, tab3, tab4 = st.tabs(["📈 Glucose History", "💉 Insulin History", "🍽️ Meal History", "🏃‍♀️ Exercise History"])
     
     with tab1:
+        st.subheader("Recent Glucose Readings")
         if st.session_state.glucose_readings:
-            st.markdown("### 📈 Recent Glucose Readings")
-            for reading in reversed(st.session_state.glucose_readings[-10:]):
-                timestamp_str = reading['timestamp'].strftime('%m/%d %H:%M')
-                trend_icon = "📈" if "rising" in reading['trend'].lower() else "📉" if "falling" in reading['trend'].lower() else "➡️"
-                st.write(f"**{timestamp_str}** - {reading['value']} mg/dL {reading['trend_arrow']} {trend_icon} ({reading['trend']})")
+            # Show most recent first (reverse chronological)
+            recent_readings = list(reversed(st.session_state.glucose_readings[-15:]))  # Last 15, newest first
+            
+            for i, reading in enumerate(recent_readings):
+                # Calculate actual index in the original list
+                actual_index = len(st.session_state.glucose_readings) - 1 - i
+                
+                col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 1])
+                
+                with col1:
+                    # Color code based on value
+                    if reading['value'] < 70:
+                        st.markdown(f"🔴 **{reading['value']} mg/dL**")
+                    elif reading['value'] > 180:
+                        st.markdown(f"🟠 **{reading['value']} mg/dL**")
+                    else:
+                        st.markdown(f"🟢 **{reading['value']} mg/dL**")
+                
+                with col2:
+                    st.write(f"{reading['trend_arrow']} {reading.get('trend', '')}")
+                
+                with col3:
+                    st.write(reading['timestamp'].strftime('%m/%d %I:%M %p'))
+                
+                with col4:
+                    source = reading.get('source', 'Manual')
+                    st.write(f"📱 {source}")
+                
+                with col5:
+                    if st.button("🗑️", key=f"del_glucose_{actual_index}", help="Delete this reading"):
+                        delete_entry('glucose', actual_index)
+                
+                st.divider()
         else:
-            st.info("No glucose readings yet")
+            st.info("No glucose readings yet. Add one manually or wait for Dexcom data.")
     
     with tab2:
+        st.subheader("Recent Insulin Doses")
         if st.session_state.insulin_log:
-            st.markdown("### 💉 Recent Insulin Entries")
-            for entry in reversed(st.session_state.insulin_log[-10:]):
-                timestamp_str = entry['timestamp'].strftime('%m/%d %H:%M')
-                type_icon = "💉" if entry['type'] == 'bolus' else "🔄"
-                st.write(f"**{timestamp_str}** - {entry['dose']}u {entry['type']} {type_icon}")
-                if entry['notes']:
-                    st.write(f"  _{entry['notes']}_")
+            # Show most recent first
+            recent_insulin = list(reversed(st.session_state.insulin_log[-15:]))  # Last 15, newest first
+            
+            for i, dose in enumerate(recent_insulin):
+                actual_index = len(st.session_state.insulin_log) - 1 - i
+                
+                col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 1])
+                
+                with col1:
+                    # Different icons for insulin types
+                    icon = "💉" if dose['type'] == 'bolus' else "🕐"
+                    st.markdown(f"{icon} **{dose['dose']} units**")
+                
+                with col2:
+                    st.write(f"{dose['type']}")
+                
+                with col3:
+                    st.write(dose['timestamp'].strftime('%m/%d %I:%M %p'))
+                
+                with col4:
+                    # Show notes if any
+                    notes = dose.get('notes', '')
+                    if notes:
+                        st.write(f"📝 {notes[:20]}...")
+                    else:
+                        st.write("—")
+                
+                with col5:
+                    if st.button("🗑️", key=f"del_insulin_{actual_index}", help="Delete this dose"):
+                        delete_entry('insulin', actual_index)
+                
+                st.divider()
         else:
-            st.info("No insulin entries yet")
+            st.info("No insulin doses logged yet. Use the sidebar to log your first dose.")
     
     with tab3:
+        st.subheader("Recent Meals")
         if st.session_state.meal_log:
-            st.markdown("### 🍽️ Recent Meals")
-            for meal in reversed(st.session_state.meal_log[-10:]):
-                timestamp_str = meal['timestamp'].strftime('%m/%d %H:%M')
-                st.write(f"**{timestamp_str}** - {meal['carbs']}g carbs, {meal['protein']}g protein, {meal['calories']} cal 🍽️")
-                if meal['description']:
-                    st.write(f"  _{meal['description']}_")
+            # Show most recent first
+            recent_meals = list(reversed(st.session_state.meal_log[-15:]))  # Last 15, newest first
+            
+            for i, meal in enumerate(recent_meals):
+                actual_index = len(st.session_state.meal_log) - 1 - i
+                
+                col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+                
+                with col1:
+                    st.markdown(f"🍽️ **{meal.get('description', 'Unknown meal')}**")
+                    # Show method if photo
+                    if meal.get('method') == 'photo':
+                        st.write("📸 Photo analyzed")
+                
+                with col2:
+                    carbs = meal.get('carbs', 0)
+                    protein = meal.get('protein', 0)
+                    calories = meal.get('calories', 0)
+                    st.write(f"🥖 {carbs}g carbs")
+                    if protein > 0:
+                        st.write(f"🥩 {protein}g protein")
+                    if calories > 0:
+                        st.write(f"🔥 {calories} cal")
+                
+                with col3:
+                    st.write(meal['timestamp'].strftime('%m/%d %I:%M %p'))
+                
+                with col4:
+                    if st.button("🗑️", key=f"del_meal_{actual_index}", help="Delete this meal"):
+                        delete_entry('meal', actual_index)
+                
+                st.divider()
         else:
-            st.info("No meal entries yet")
+            st.info("No meals logged yet. Use the sidebar to log your first meal or take a photo.")
     
     with tab4:
+        st.subheader("Recent Exercise")
         if st.session_state.exercise_log:
-            st.markdown("### 🏃‍♀️ Recent Exercise")
-            for exercise in reversed(st.session_state.exercise_log[-10:]):
-                timestamp_str = exercise['timestamp'].strftime('%m/%d %H:%M')
-                exercise_icon = "🏃" if "Cardio" in exercise['type'] else "💪" if "Strength" in exercise['type'] else "🏃‍♀️"
-                intensity_short = exercise['intensity'].split(' ')[0]  # Just "Light", "Moderate", etc.
-                st.write(f"**{timestamp_str}** - {exercise['duration']}min {exercise['type']} {exercise_icon} ({intensity_short})")
-                if exercise['notes']:
-                    st.write(f"  _{exercise['notes']}_")
+            # Show most recent first
+            recent_exercise = list(reversed(st.session_state.exercise_log[-15:]))  # Last 15, newest first
+            
+            for i, exercise in enumerate(recent_exercise):
+                actual_index = len(st.session_state.exercise_log) - 1 - i
+                
+                col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+                
+                with col1:
+                    # Different icons for exercise types
+                    if "Cardio" in exercise['type']:
+                        icon = "🏃‍♀️"
+                    elif "Strength" in exercise['type']:
+                        icon = "💪"
+                    elif "HIIT" in exercise['type']:
+                        icon = "⚡"
+                    elif "Yoga" in exercise['type']:
+                        icon = "🧘‍♀️"
+                    else:
+                        icon = "🏃‍♀️"
+                    
+                    st.markdown(f"{icon} **{exercise['type']}**")
+                
+                with col2:
+                    st.write(f"⏱️ {exercise['duration']} min")
+                    st.write(f"💪 {exercise['intensity']}")
+                
+                with col3:
+                    st.write(exercise['timestamp'].strftime('%m/%d %I:%M %p'))
+                    # Show glucose effect prediction
+                    if exercise['type'].startswith("Cardio") or "HIIT" in exercise['type']:
+                        st.write("⬇️ May lower glucose")
+                    elif "Strength" in exercise['type']:
+                        st.write("⬆️ May raise glucose")
+                
+                with col4:
+                    if st.button("🗑️", key=f"del_exercise_{actual_index}", help="Delete this exercise"):
+                        delete_entry('exercise', actual_index)
+                
+                st.divider()
         else:
-            st.info("No exercise entries yet")
+            st.info("No exercise logged yet. Use the sidebar to log your first workout.")
 
 if __name__ == "__main__":
     main()
