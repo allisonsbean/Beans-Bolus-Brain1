@@ -35,15 +35,23 @@
       "trend": "steady",
       "trend_arrow": "\u2192",
       "timestamp": "2025-08-13T23:26:01-04:00"
-    }
-  ],
-  "insulin_log": [
+    },
     {
-      "timestamp": "2025-08-13T23:20:21.669305-04:00",
-      "type": "bolus",
-      "dose": 1,
-      "notes": "Correction bolus"
+      "value": 175,
+      "trend": "steady",
+      "trend_arrow": "\u2192",
+      "timestamp": "2025-08-13T23:36:01-04:00"
     }
   ],
-  "meal_log": []
+  "insulin_log": [],
+  "meal_log": [],
+  "exercise_log": [
+    {
+      "timestamp": "2025-08-14T23:13:22.228963-04:00",
+      "type": "Other",
+      "duration": 30,
+      "intensity": "High (Hard, difficult to talk)",
+      "notes": ""
+    }
+  ]
 }

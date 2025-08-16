@@ -28,7 +28,8 @@ def save_data_to_file():
         data = {
             'glucose_readings': [],
             'insulin_log': [],
-            'meal_log': []
+            'meal_log': [],
+            'exercise_log': []
         }
         
         # Convert glucose readings to serializable format
@@ -57,6 +58,16 @@ def save_data_to_file():
                 'protein': entry['protein'],
                 'calories': entry['calories'],
                 'description': entry['description']
+            })
+        
+        # Convert exercise log
+        for entry in st.session_state.exercise_log:
+            data['exercise_log'].append({
+                'timestamp': entry['timestamp'].isoformat(),
+                'type': entry['type'],
+                'duration': entry['duration'],
+                'intensity': entry['intensity'],
+                'notes': entry['notes']
             })
         
         # Save to file
@@ -114,6 +125,20 @@ def load_data_from_file():
                     'calories': entry['calories'],
                     'description': entry['description']
                 })
+            
+            # Load exercise log
+            st.session_state.exercise_log = []
+            for entry in data.get('exercise_log', []):
+                timestamp = datetime.fromisoformat(entry['timestamp'])
+                if timestamp.tzinfo is None:
+                    timestamp = eastern.localize(timestamp)
+                st.session_state.exercise_log.append({
+                    'timestamp': timestamp,
+                    'type': entry['type'],
+                    'duration': entry['duration'],
+                    'intensity': entry['intensity'],
+                    'notes': entry['notes']
+                })
                 
     except Exception as e:
         st.error(f"Error loading data: {e}")
@@ -125,6 +150,8 @@ if 'insulin_log' not in st.session_state:
     st.session_state.insulin_log = []
 if 'meal_log' not in st.session_state:
     st.session_state.meal_log = []
+if 'exercise_log' not in st.session_state:
+    st.session_state.exercise_log = []
 if 'basal_dose' not in st.session_state:
     st.session_state.basal_dose = 19
 
@@ -222,6 +249,18 @@ def add_insulin_entry(dose, insulin_type, notes=""):
         'notes': notes
     }
     st.session_state.insulin_log.append(entry)
+    save_data_to_file()
+
+def add_exercise_entry(exercise_type, duration, intensity, notes=""):
+    """Add exercise entry to log"""
+    entry = {
+        'timestamp': datetime.now(eastern),
+        'type': exercise_type,
+        'duration': duration,
+        'intensity': intensity,
+        'notes': notes
+    }
+    st.session_state.exercise_log.append(entry)
     save_data_to_file()
 
 def add_meal_entry(carbs, protein=0, calories=0, description=""):
@@ -509,11 +548,15 @@ def create_glucose_chart():
                 meal_time = eastern.localize(meal_time)
             
             if meal_time >= cutoff_time:
-                carb_text = f"🍽️ {int(meal['carbs'])}g"
+                # Ensure carbs is properly converted to int
+                carbs_value = int(float(meal.get('carbs', 0)))
+                carb_text = f"🍽️ {carbs_value}g"
                 fig.add_vline(x=meal_time, line_dash="dot", line_color="orange", 
                              annotation_text=carb_text)
     except Exception as e:
-        st.warning(f"Could not add meal markers: {e}")
+        # Only show warning if there are actually meals to display
+        if st.session_state.meal_log:
+            st.warning(f"Could not add meal markers: {e}")
     
     # Add insulin markers - safer version
     try:
@@ -527,11 +570,47 @@ def create_glucose_chart():
                 insulin_time = eastern.localize(insulin_time)
             
             if insulin_time >= cutoff_time and insulin['type'] == 'bolus':
-                dose_text = f"💉 {float(insulin['dose'])}u"
+                # Ensure dose is properly converted to float
+                dose_value = float(insulin.get('dose', 0))
+                dose_text = f"💉 {dose_value}u"
                 fig.add_vline(x=insulin_time, line_dash="dot", line_color="purple",
                              annotation_text=dose_text)
     except Exception as e:
-        st.warning(f"Could not add insulin markers: {e}")
+        # Only show warning if there are actually insulin entries to display
+        if any(entry['type'] == 'bolus' for entry in st.session_state.insulin_log):
+            st.warning(f"Could not add insulin markers: {e}")
+    
+    # Add exercise markers to chart
+    try:
+        for exercise in st.session_state.exercise_log:
+            exercise_time = exercise['timestamp']
+            if isinstance(exercise_time, str):
+                exercise_time = datetime.fromisoformat(exercise_time)
+                if exercise_time.tzinfo is None:
+                    exercise_time = eastern.localize(exercise_time)
+            elif exercise_time.tzinfo is None:
+                exercise_time = eastern.localize(exercise_time)
+            
+            if exercise_time >= cutoff_time:
+                # Different colors for different exercise types
+                if "Cardio" in exercise['type'] or "HIIT" in exercise['type']:
+                    exercise_color = "red"
+                    exercise_icon = "🏃"
+                elif "Strength" in exercise['type']:
+                    exercise_color = "purple"
+                    exercise_icon = "💪"
+                else:
+                    exercise_color = "blue"
+                    exercise_icon = "🏃‍♀️"
+                
+                duration_value = int(float(exercise.get('duration', 0)))
+                exercise_text = f"{exercise_icon} {duration_value}m"
+                fig.add_vline(x=exercise_time, line_dash="dot", line_color=exercise_color,
+                             annotation_text=exercise_text)
+    except Exception as e:
+        # Only show warning if there are actually exercise entries to display
+        if st.session_state.exercise_log:
+            st.warning(f"Could not add exercise markers: {e}")
     
     fig.update_layout(
         title="12-Hour Glucose Trend",
@@ -661,6 +740,20 @@ def main():
                              if GLUCOSE_RANGE[0] <= g['value'] <= GLUCOSE_RANGE[1])
                 time_in_range = (in_range / len(today_glucose)) * 100
                 st.metric("Time in Range", f"{time_in_range:.0f}%")
+            
+            # Estimated A1C calculation - moved here to ensure it always shows
+            if len(st.session_state.glucose_readings) >= 5:  # Lowered threshold to 5 readings
+                # Calculate average glucose from all readings
+                all_glucose_values = [reading['value'] for reading in st.session_state.glucose_readings]
+                avg_glucose = sum(all_glucose_values) / len(all_glucose_values)
+                
+                # Convert average glucose to estimated A1C using the formula: A1C = (avg_glucose + 46.7) / 28.7
+                estimated_a1c = (avg_glucose + 46.7) / 28.7
+                
+                st.metric("Estimated A1C", f"{estimated_a1c:.1f}%", 
+                         help=f"Based on {len(all_glucose_values)} glucose readings")
+        else:
+            st.info("Need glucose readings to calculate A1C")
     
     # Sidebar for logging
     with st.sidebar:
@@ -699,6 +792,48 @@ def main():
                 st.session_state.basal_dose = basal_dose
                 add_insulin_entry(basal_dose, 'basal', f"Daily basal: {basal_dose}u")
                 st.success(f"Updated daily basal to {basal_dose}u")
+                st.rerun()
+        
+        # Exercise logging
+        with st.expander("🏃‍♀️ Log Exercise"):
+            st.markdown("**Exercise affects glucose - track to predict lows!**")
+            
+            exercise_type = st.selectbox("Exercise Type", [
+                "Cardio (Walking, Running, Cycling)",
+                "Strength Training (Weights, Resistance)",
+                "HIIT (High Intensity Interval)",
+                "Yoga/Stretching",
+                "Sports (Basketball, Tennis, etc.)",
+                "Other"
+            ])
+            
+            exercise_duration = st.number_input("Duration (minutes)", min_value=1, max_value=300, value=30)
+            
+            exercise_intensity = st.selectbox("Intensity", [
+                "Low (Easy pace, can talk normally)",
+                "Moderate (Somewhat hard, can talk with effort)", 
+                "High (Hard, difficult to talk)",
+                "Very High (Maximum effort)"
+            ])
+            
+            exercise_notes = st.text_input("Exercise notes (optional)", placeholder="e.g., felt good, legs tired")
+            
+            # Exercise impact prediction
+            if exercise_type.startswith("Cardio") or "HIIT" in exercise_type:
+                glucose_effect = "⬇️ May lower glucose 1-4 hours"
+                color = "orange"
+            elif exercise_type.startswith("Strength"):
+                glucose_effect = "⬆️ May raise glucose initially, then lower"
+                color = "blue"
+            else:
+                glucose_effect = "📊 Monitor glucose closely"
+                color = "gray"
+            
+            st.markdown(f"**Expected effect:** <span style='color: {color};'>{glucose_effect}</span>", unsafe_allow_html=True)
+            
+            if st.button("Log Exercise"):
+                add_exercise_entry(exercise_type, exercise_duration, exercise_intensity, exercise_notes)
+                st.success(f"Logged {exercise_duration}min {exercise_type}")
                 st.rerun()
         
         # Meal logging with bolus suggestion
@@ -865,7 +1000,7 @@ def main():
                                             help="Calorie intake on your best days")
     
     # Data tables with delete functionality
-    tab1, tab2, tab3 = st.tabs(["📈 Glucose History", "💉 Insulin History", "🍽️ Meal History"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📈 Glucose History", "💉 Insulin History", "🍽️ Meal History", "🏃‍♀️ Exercise History"])
     
     with tab1:
         if st.session_state.glucose_readings:
@@ -981,11 +1116,52 @@ def main():
         else:
             st.info("No meal entries yet")
     
+    with tab4:
+        if st.session_state.exercise_log:
+            st.markdown("### 🏃‍♀️ Exercise Entries")
+            
+            # Show recent entries with delete buttons
+            for i, exercise in enumerate(reversed(st.session_state.exercise_log[-20:])):
+                actual_index = len(st.session_state.exercise_log) - 1 - i
+                timestamp_str = exercise['timestamp'].strftime('%m/%d %H:%M') if hasattr(exercise['timestamp'], 'strftime') else str(exercise['timestamp'])
+                
+                col1, col2, col3, col4, col5, col6 = st.columns([3, 2, 1, 1, 2, 1])
+                
+                with col1:
+                    st.write(f"**{timestamp_str}**")
+                with col2:
+                    st.write(f"{exercise['type'][:15]}...")
+                with col3:
+                    st.write(f"{exercise['duration']}m")
+                with col4:
+                    intensity_short = exercise['intensity'].split(' ')[0]  # Just "Low", "Moderate", etc.
+                    st.write(f"{intensity_short}")
+                with col5:
+                    st.write(f"{exercise['notes'][:15]}..." if len(exercise['notes']) > 15 else exercise['notes'])
+                with col6:
+                    if st.button("🗑️", key=f"del_exercise_{actual_index}", help="Delete this exercise"):
+                        st.session_state.exercise_log.pop(actual_index)
+                        save_data_to_file()
+                        st.success("Exercise entry deleted!")
+                        st.rerun()
+            
+            st.write(f"Showing latest 20 of {len(st.session_state.exercise_log)} total exercises")
+            
+            if len(st.session_state.exercise_log) > 20:
+                with st.expander("📊 Full Data Table"):
+                    exercise_df = pd.DataFrame(st.session_state.exercise_log)
+                    exercise_df['timestamp'] = exercise_df['timestamp'].apply(
+                        lambda x: x.strftime('%m/%d %H:%M') if hasattr(x, 'strftime') else str(x)
+                    )
+                    st.dataframe(exercise_df[['timestamp', 'type', 'duration', 'intensity', 'notes']], use_container_width=True)
+        else:
+            st.info("No exercise entries yet")
+    
     # Bulk delete options
     st.markdown("---")
     st.markdown("### 🗑️ Bulk Delete Options")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         if st.session_state.glucose_readings and st.button("Clear All Glucose Data", type="secondary"):
@@ -1009,6 +1185,14 @@ def main():
                 st.session_state.meal_log = []
                 save_data_to_file()
                 st.success("All meal data cleared!")
+                st.rerun()
+    
+    with col4:
+        if st.session_state.exercise_log and st.button("Clear All Exercise Data", type="secondary"):
+            if st.checkbox("⚠️ Confirm exercise data deletion"):
+                st.session_state.exercise_log = []
+                save_data_to_file()
+                st.success("All exercise data cleared!")
                 st.rerun()
 
 if __name__ == "__main__":
