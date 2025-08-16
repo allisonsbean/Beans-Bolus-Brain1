@@ -1487,3 +1487,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+echo "
+# Force the main function to run
+main()
+" >> dashboard.py

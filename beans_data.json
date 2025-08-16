@@ -41,17 +41,101 @@
       "trend": "steady",
       "trend_arrow": "\u2192",
       "timestamp": "2025-08-13T23:36:01-04:00"
+    },
+    {
+      "value": 87,
+      "trend": "rising slightly",
+      "trend_arrow": "\u2197",
+      "timestamp": "2025-08-16T08:21:08-04:00"
+    },
+    {
+      "value": 101,
+      "trend": "rising",
+      "trend_arrow": "\u2191",
+      "timestamp": "2025-08-16T08:26:08-04:00"
+    },
+    {
+      "value": 114,
+      "trend": "rising",
+      "trend_arrow": "\u2191",
+      "timestamp": "2025-08-16T08:31:08-04:00"
+    },
+    {
+      "value": 121,
+      "trend": "rising",
+      "trend_arrow": "\u2191",
+      "timestamp": "2025-08-16T08:36:08-04:00"
+    },
+    {
+      "value": 124,
+      "trend": "rising slightly",
+      "trend_arrow": "\u2197",
+      "timestamp": "2025-08-16T08:46:08-04:00"
+    },
+    {
+      "value": 123,
+      "trend": "steady",
+      "trend_arrow": "\u2192",
+      "timestamp": "2025-08-16T08:51:08-04:00"
+    },
+    {
+      "value": 70,
+      "trend": "steady",
+      "trend_arrow": "\u2192",
+      "timestamp": "2025-08-16T11:21:08-04:00"
+    },
+    {
+      "value": 75,
+      "trend": "steady",
+      "trend_arrow": "\u2192",
+      "timestamp": "2025-08-16T11:26:08-04:00"
+    },
+    {
+      "value": 79,
+      "trend": "steady",
+      "trend_arrow": "\u2192",
+      "timestamp": "2025-08-16T11:31:09-04:00"
+    },
+    {
+      "value": 111,
+      "trend": "rising slightly",
+      "trend_arrow": "\u2197",
+      "timestamp": "2025-08-16T11:46:08-04:00"
+    },
+    {
+      "value": 132,
+      "trend": "rising",
+      "trend_arrow": "\u2191",
+      "timestamp": "2025-08-16T11:56:08-04:00"
+    },
+    {
+      "value": 120,
+      "trend": "Manual Entry",
+      "trend_arrow": "",
+      "timestamp": "2025-08-16T12:01:00-04:00"
+    },
+    {
+      "value": 128,
+      "trend": "steady",
+      "trend_arrow": "\u2192",
+      "timestamp": "2025-08-16T12:36:08-04:00"
+    },
+    {
+      "value": 286,
+      "trend": "rising",
+      "trend_arrow": "\u2191",
+      "timestamp": "2025-08-16T16:26:09-04:00"
     }
   ],
   "insulin_log": [],
-  "meal_log": [],
-  "exercise_log": [
+  "meal_log": [
     {
-      "timestamp": "2025-08-14T23:13:22.228963-04:00",
-      "type": "Other",
-      "duration": 30,
-      "intensity": "High (Hard, difficult to talk)",
-      "notes": ""
+      "timestamp": "2025-08-16T11:31:00-04:00",
+      "carbs": 30,
+      "protein": 0,
+      "calories": 0,
+      "description": ""
     }
-  ]
+  ],
+  "exercise_log": []
 }

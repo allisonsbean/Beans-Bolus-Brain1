@@ -886,7 +886,7 @@ def main():
         else:
             st.info("Need glucose readings to calculate A1C")
     
-    # COMPLETE SIDEBAR RESTORATION - All functionality restored
+    # COMPLETE SIDEBAR - All functionality restored
     with st.sidebar:
         st.header("📝 Quick Logging")
         
@@ -1049,7 +1049,7 @@ def main():
                 st.success(f"Logged {exercise_duration}min {exercise_type} at {exercise_datetime.strftime('%m/%d %H:%M')}")
                 st.rerun()
         
-        # Meal logging with bolus suggestion - READY FOR AI INTEGRATION
+        # Meal logging with bolus suggestion - READY FOR CLAUDE AI
         with st.expander("🍽️ Log Meal & Get Bolus Suggestion"):
             # Photo analysis option - PLACEHOLDER FOR CLAUDE AI
             st.markdown("**📸 Photo Analysis (Ready for Claude AI)**")
@@ -1356,7 +1356,7 @@ def main():
             
             st.write(f"Showing latest 20 of {len(st.session_state.insulin_log)} total entries")
             
-                        if len(st.session_state.insulin_log) > 20:
+            if len(st.session_state.insulin_log) > 20:
                 with st.expander("📊 Full Data Table"):
                     insulin_df = pd.DataFrame(st.session_state.insulin_log)
                     insulin_df['timestamp'] = insulin_df['timestamp'].apply(
