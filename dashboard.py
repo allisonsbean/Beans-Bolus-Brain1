@@ -700,23 +700,84 @@ def lookup_nutrition_by_barcode(barcode):
         st.error(f"❌ Error looking up barcode: {str(e)}")
         st.info("Try manual entry or photo analysis instead")
 
-def barcode_scanner_interface():
-    """Simple barcode scanner interface"""
-    st.subheader("📱 Barcode Scanner")
+def smart_camera_interface():
+    """Smart camera interface for both barcodes and food photos"""
+    st.subheader("📸 Smart Camera - Barcodes & Food Photos")
     
-    st.markdown("**Enter barcode manually:**")
+    # File uploader for photos
+    uploaded_file = st.file_uploader(
+        "📱 Take photo or upload image", 
+        type=['png', 'jpg', 'jpeg'],
+        help="Point camera at barcode OR take a food photo - we'll detect which!"
+    )
+    
+    if uploaded_file:
+        # Display the image
+        col1, col2 = st.columns([1, 2])
+        
+        with col1:
+            st.image(uploaded_file, width=200, caption="Your photo")
+        
+        with col2:
+            if st.button("🤖 Analyze Photo", key="smart_analyze"):
+                with st.spinner("Detecting content type..."):
+                    # Load image
+                    image = Image.open(uploaded_file)
+                    
+                    # Detect if barcode or food
+                    is_barcode = detect_barcode_in_image(image)
+                    
+                    if is_barcode:
+                        st.info("📱 **Barcode detected!** Attempting to read...")
+                        
+                        # Try to extract barcode
+                        barcode = extract_barcode_from_image(image)
+                        
+                        if barcode:
+                            st.success(f"Found barcode: {barcode}")
+                            lookup_nutrition_by_barcode(barcode)
+                        else:
+                            st.warning("📱 **Barcode detected but couldn't read the numbers automatically.**")
+                            st.info("Please enter the barcode manually below:")
+                            
+                            # Manual barcode entry as fallback
+                            manual_barcode = st.text_input(
+                                "Enter the numbers from the barcode:", 
+                                placeholder="Look for numbers under the barcode lines",
+                                key="fallback_barcode"
+                            )
+                            
+                            if manual_barcode and st.button("🔍 Look Up Product", key="fallback_lookup"):
+                                lookup_nutrition_by_barcode(manual_barcode)
+                    
+                    else:
+                        st.info("🍽️ **Food photo detected!** Analyzing with Claude AI...")
+                        
+                        # Use existing food photo analysis
+                        analysis = analyze_food_photo(uploaded_file)
+                        if analysis.get('success'):
+                            st.success("✅ Food analysis complete!")
+                            st.session_state.photo_analysis = analysis
+                            
+                            # Display Claude's analysis
+                            if 'foods' in analysis:
+                                st.write("**🤖 Claude AI found:**")
+                                for food in analysis['foods']:
+                                    st.write(f"• {food['name']}: {food['carbs']}g carbs, {food['protein']}g protein")
+                                st.write(f"**Total: {analysis['total_carbs']}g carbs, {analysis['total_protein']}g protein**")
+                                if 'confidence' in analysis:
+                                    st.write(f"**Confidence:** {analysis['confidence']}")
+                        else:
+                            st.error(f"❌ {analysis.get('error', 'Analysis failed')}")
+    
+    # Manual barcode entry option
+    st.markdown("---")
+    st.markdown("**Or enter barcode manually:**")
     manual_barcode = st.text_input("UPC/Barcode:", placeholder="Enter barcode numbers")
     
-    if manual_barcode and st.button("🔍 Look Up Product"):
+    if manual_barcode and st.button("🔍 Look Up Product", key="manual_lookup"):
         lookup_nutrition_by_barcode(manual_barcode)
-    
-    st.markdown("""
-    <div style="background: #f0f8ff; padding: 15px; border-radius: 10px; margin: 10px 0;">
-    <h4>📸 Instructions</h4>
-    <p>Look for the long number under the barcode lines on any packaged food!</p>
-    <p><b>Example:</b> Try barcode 7622300441906 (Toblerone) to test it!</p>
-    </div>
-    """, unsafe_allow_html=True)
+        
 def analyze_nighttime_patterns():
     """Enhanced analysis specifically for nighttime low patterns"""
     st.subheader("🌙 Nighttime Low Analysis")
@@ -831,6 +892,65 @@ def analyze_nighttime_patterns():
     else:
         st.success("No clear post-dinner bolus pattern detected!")
 
+def detect_barcode_in_image(image):
+    """Detect if image contains a barcode using simple heuristics"""
+    try:
+        import numpy as np
+        
+        # Convert PIL image to numpy array
+        img_array = np.array(image.convert('L'))  # Convert to grayscale
+        
+        # Simple barcode detection heuristics
+        height, width = img_array.shape
+        
+        # Check for horizontal lines (barcode pattern)
+        horizontal_edges = 0
+        for row in img_array[height//3:2*height//3]:  # Check middle third
+            edges = 0
+            for i in range(1, len(row)):
+                if abs(int(row[i]) - int(row[i-1])) > 50:  # Significant color change
+                    edges += 1
+            if edges > width // 4:  # Many edges suggests barcode
+                horizontal_edges += 1
+        
+        # If many rows have lots of edges, probably a barcode
+        barcode_score = horizontal_edges / (height // 3)
+        
+        return barcode_score > 0.3  # Threshold for barcode detection
+        
+    except Exception as e:
+        return False  # If detection fails, assume it's food
+    
+def extract_barcode_from_image(image):
+    """Try to extract barcode number from image using pyzbar"""
+    try:
+        # Try to import pyzbar
+        from pyzbar import pyzbar
+        import numpy as np
+        
+        # Convert PIL image to numpy array
+        img_array = np.array(image)
+        
+        # Decode barcodes
+        barcodes = pyzbar.decode(img_array)
+        
+        if barcodes:
+            # Return the first barcode found
+            barcode_data = barcodes[0].data.decode('utf-8')
+            barcode_type = barcodes[0].type
+            
+            st.success(f"📱 **Automatically read barcode:** {barcode_data} (Type: {barcode_type})")
+            return barcode_data
+        else:
+            return None
+            
+    except ImportError:
+        st.warning("📱 Automatic barcode reading not available - install pyzbar library")
+        return None
+    except Exception as e:
+        st.error(f"Error reading barcode: {str(e)}")
+        return None
+    
 def main():
     st.title("🧠 Bean's Bolus Brain")
     st.subheader("AI-Powered Diabetes Management Dashboard")
@@ -1078,8 +1198,8 @@ def main():
                 st.rerun()
 
         # Barcode scanner section
-        with st.expander("📱 Barcode Scanner for Packaged Foods"):
-            barcode_scanner_interface()
+        with st.expander("📸 Smart Camera - Barcodes & Food Photos"):
+            smart_camera_interface()
 
         # Meal logging with enhanced bolus calculator
         with st.expander("🍽️ Log Meal & Get Bolus Suggestion"):

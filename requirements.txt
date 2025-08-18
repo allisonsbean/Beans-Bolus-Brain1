@@ -1,9 +1,10 @@
 streamlit
-plotly
 pandas
+numpy
+plotly
+pytz
 pydexcom
+anthropic
 Pillow
-anthropic
-anthropic
-anthropic
-anthropic
+requests
+pyzbar
