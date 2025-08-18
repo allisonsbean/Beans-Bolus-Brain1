@@ -721,11 +721,22 @@ def smart_camera_interface():
         with col2:
             if st.button("🤖 Analyze Photo", key="smart_analyze"):
                 with st.spinner("Detecting content type..."):
-                    # Load image
-                    image = Image.open(uploaded_file)
-                    
-                    # Detect if barcode or food
-                    is_barcode = detect_barcode_in_image(image)
+                    try:
+                        # Load and resize image for mobile compatibility
+                        image = Image.open(uploaded_file)
+                        
+                        # Resize large images to prevent memory issues
+                        max_size = 1024
+                        if image.width > max_size or image.height > max_size:
+                            image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+                        
+                        # Detect if barcode or food
+                        is_barcode = detect_barcode_in_image(image)
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error processing image: {str(e)}")
+                        st.info("💡 Try taking a smaller photo or using a different image format")
+                        return
                     
                     if is_barcode:
                         st.info("📱 **Barcode detected!** Attempting to read...")
@@ -897,11 +908,24 @@ def detect_barcode_in_image(image):
     try:
         import numpy as np
         
+        # Ensure image is not too large
+        max_size = 800
+        if image.width > max_size or image.height > max_size:
+            image = image.copy()
+            image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+        
         # Convert PIL image to numpy array
         img_array = np.array(image.convert('L'))  # Convert to grayscale
         
-        # Simple barcode detection heuristics
+        # Check if array is valid size
+        if img_array.size == 0:
+            return False
+            
         height, width = img_array.shape
+        
+        # Skip tiny images
+        if height < 50 or width < 50:
+            return False
         
         # Check for horizontal lines (barcode pattern)
         horizontal_edges = 0
