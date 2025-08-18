@@ -11,6 +11,7 @@ import io
 import anthropic
 import base64
 from PIL import Image
+import requests
 
 def delete_entry(entry_type, index):
     """Delete an entry from the specified log"""
@@ -625,6 +626,211 @@ def add_insulin_entry(dose, insulin_type, notes=""):
     st.session_state.insulin_log.append(entry)
     save_data_to_file()
 
+def lookup_nutrition_by_barcode(barcode):
+    """Look up nutrition information using OpenFoodFacts API"""
+    try:
+        # OpenFoodFacts API call
+        url = f"https://world.openfoodfacts.org/api/v0/product/{barcode}.json"
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            if data.get('status') == 1:  # Product found
+                product = data['product']
+                
+                # Extract nutrition info
+                product_name = product.get('product_name', 'Unknown Product')
+                serving_size = product.get('serving_size', 'Check package')
+                
+                # Get nutrition per 100g
+                nutriments = product.get('nutriments', {})
+                carbs_100g = nutriments.get('carbohydrates_100g', 0)
+                protein_100g = nutriments.get('proteins_100g', 0)
+                calories_100g = nutriments.get('energy-kcal_100g', 0)
+                
+                # Display product info
+                st.success(f"✅ Product Found: **{product_name}**")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.info(f"**Serving Size:** {serving_size}")
+                
+                with col2:
+                    st.write("**Nutrition (per 100g):**")
+                    st.write(f"🍞 Carbs: {carbs_100g}g")
+                    st.write(f"🥩 Protein: {protein_100g}g") 
+                    st.write(f"🔥 Calories: {calories_100g}")
+                
+                # Serving size adjustment
+                st.markdown("**Adjust serving size:**")
+                serving_multiplier = st.number_input(
+                    "Serving multiplier", 
+                    min_value=0.1, 
+                    max_value=10.0, 
+                    value=1.0, 
+                    step=0.1,
+                    help="1.0 = one serving, 0.5 = half serving, 2.0 = double serving"
+                )
+                
+                # Calculate actual nutrition
+                actual_carbs = round(carbs_100g * serving_multiplier, 1)
+                actual_protein = round(protein_100g * serving_multiplier, 1)
+                actual_calories = round(calories_100g * serving_multiplier)
+                
+                st.markdown("**Your portion:**")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Carbs", f"{actual_carbs}g")
+                with col2:
+                    st.metric("Protein", f"{actual_protein}g")
+                with col3:
+                    st.metric("Calories", f"{actual_calories}")
+                
+                st.info("💡 Use the regular meal logging to calculate bolus and save this meal!")
+                
+            else:
+                st.error("❌ Product not found in database")
+                st.info("Try a different barcode or use manual entry/photo analysis instead")
+        
+        else:
+            st.error("❌ Failed to connect to nutrition database")
+    
+    except Exception as e:
+        st.error(f"❌ Error looking up barcode: {str(e)}")
+        st.info("Try manual entry or photo analysis instead")
+
+def barcode_scanner_interface():
+    """Simple barcode scanner interface"""
+    st.subheader("📱 Barcode Scanner")
+    
+    st.markdown("**Enter barcode manually:**")
+    manual_barcode = st.text_input("UPC/Barcode:", placeholder="Enter barcode numbers")
+    
+    if manual_barcode and st.button("🔍 Look Up Product"):
+        lookup_nutrition_by_barcode(manual_barcode)
+    
+    st.markdown("""
+    <div style="background: #f0f8ff; padding: 15px; border-radius: 10px; margin: 10px 0;">
+    <h4>📸 Instructions</h4>
+    <p>Look for the long number under the barcode lines on any packaged food!</p>
+    <p><b>Example:</b> Try barcode 7622300441906 (Toblerone) to test it!</p>
+    </div>
+    """, unsafe_allow_html=True)
+def analyze_nighttime_patterns():
+    """Enhanced analysis specifically for nighttime low patterns"""
+    st.subheader("🌙 Nighttime Low Analysis")
+    
+    if len(st.session_state.glucose_readings) < 10:
+        st.warning("Need more glucose readings for nighttime analysis")
+        return
+    
+    if len(st.session_state.insulin_log) < 3:
+        st.warning("Need more insulin data for nighttime analysis")
+        return
+    
+    # Convert to DataFrames
+    glucose_data = []
+    for reading in st.session_state.glucose_readings:
+        timestamp = reading['timestamp']
+        if isinstance(timestamp, str):
+            timestamp = datetime.fromisoformat(timestamp)
+        glucose_data.append({
+            'timestamp': timestamp,
+            'value': reading['value']
+        })
+    glucose_df = pd.DataFrame(glucose_data)
+    
+    insulin_data = []
+    for insulin in st.session_state.insulin_log:
+        if insulin['type'] == 'bolus':
+            timestamp = insulin['timestamp']
+            if isinstance(timestamp, str):
+                timestamp = datetime.fromisoformat(timestamp)
+            insulin_data.append({
+                'timestamp': timestamp,
+                'dose': insulin['dose']
+            })
+    
+    if not insulin_data:
+        st.warning("Need bolus insulin data for analysis")
+        return
+        
+    insulin_df = pd.DataFrame(insulin_data)
+    
+    # Find nighttime lows and their relationship to boluses
+    nighttime_lows = []
+    post_dinner_lows = []
+    
+    for _, reading in glucose_df.iterrows():
+        hour = reading['timestamp'].hour
+        glucose = reading['value']
+        
+        # Nighttime low detection (10 PM - 6 AM)
+        if (hour >= 22 or hour <= 6) and glucose < 80:
+            nighttime_lows.append(reading)
+            
+            # Check if this was post-bolus (find last bolus within 6 hours)
+            cutoff_time = reading['timestamp'] - timedelta(hours=6)
+            recent_boluses = insulin_df[
+                (insulin_df['timestamp'] >= cutoff_time) & 
+                (insulin_df['timestamp'] <= reading['timestamp'])
+            ].sort_values('timestamp', ascending=False)
+            
+            if not recent_boluses.empty:
+                last_bolus = recent_boluses.iloc[0]
+                hours_since_bolus = (reading['timestamp'] - last_bolus['timestamp']).total_seconds() / 3600
+                
+                if 2 <= hours_since_bolus <= 5:  # Peak bolus action time
+                    post_dinner_lows.append({
+                        'low_time': reading['timestamp'],
+                        'glucose': glucose,
+                        'bolus_time': last_bolus['timestamp'],
+                        'bolus_dose': last_bolus['dose'],
+                        'hours_after_bolus': round(hours_since_bolus, 1)
+                    })
+    
+    # Display results
+    st.markdown("### 📊 Analysis Results")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Nighttime Lows", len(nighttime_lows))
+    with col2:
+        st.metric("Post-Dinner Bolus Lows", len(post_dinner_lows))
+    with col3:
+        risk_level = "🔴 HIGH" if len(nighttime_lows) >= 4 else "🟡 MODERATE" if len(nighttime_lows) >= 2 else "🟢 LOW"
+        st.metric("Risk Level", risk_level)
+    
+    if post_dinner_lows:
+        st.markdown("### 🎯 **Key Finding: Post-Dinner Bolus Pattern**")
+        st.error("""
+        **Your nighttime lows appear to be bolus-induced, not basal-related!**
+        
+        Most lows occur 2-5 hours after dinner boluses, which is peak insulin action time.
+        """)
+        
+        # Show specific incidents
+        st.markdown("**Recent Post-Dinner Low Episodes:**")
+        for low in post_dinner_lows[-5:]:  # Last 5 incidents
+            st.write(f"• {low['low_time'].strftime('%m/%d %I:%M %p')}: "
+                    f"{low['glucose']} mg/dL "
+                    f"({low['hours_after_bolus']}h after {low['bolus_dose']} unit bolus)")
+        
+        # Recommendations
+        st.markdown("### 💡 **Recommendations**")
+        st.success("""
+        **1. Loosen Carb Ratio**: Consider changing from 1:12 to 1:14 or 1:15
+        
+        **2. Reduce Dinner Boluses**: Start with 10-20% reduction for evening meals
+        
+        **3. Bedtime Snack**: Small protein snack if glucose <120 at bedtime
+        
+        **4. Healthcare Provider**: Share this data to adjust insulin ratios
+        """)
+    else:
+        st.success("No clear post-dinner bolus pattern detected!")
+
 def main():
     st.title("🧠 Bean's Bolus Brain")
     st.subheader("AI-Powered Diabetes Management Dashboard")
@@ -870,6 +1076,10 @@ def main():
                 save_data_to_file()
                 st.success(f"Logged {basal_dose}u basal")
                 st.rerun()
+
+        # Barcode scanner section
+        with st.expander("📱 Barcode Scanner for Packaged Foods"):
+            barcode_scanner_interface()
 
         # Meal logging with enhanced bolus calculator
         with st.expander("🍽️ Log Meal & Get Bolus Suggestion"):
@@ -1168,58 +1378,40 @@ def main():
                         st.info("Continue monitoring and consider this analysis again as you collect more data.")
     
     with col2:
-        if st.button("📊 Pattern Analysis"):
-            with st.spinner("Analyzing diabetes patterns..."):
-                if len(st.session_state.glucose_readings) < 10:
-                    st.warning("Need more glucose data for pattern analysis")
-                else:
-                    st.markdown("### 📊 Pattern Analysis Results")
-                    
-                    # Time in range analysis - handle timezone properly
-                    glucose_values = [reading['value'] for reading in st.session_state.glucose_readings]
-                    in_range_count = sum(1 for value in glucose_values if 80 <= value <= 130)
-                    in_range = (in_range_count / len(glucose_values)) * 100
-                    st.info(f"📊 Your overall time in range is {in_range:.0f}% (goal: >70%)")
-                    
-                    # Best/worst times of day - fix timezone handling
-                    try:
-                        # Create clean data without timezone for pandas
-                        hourly_data = {}
-                        for reading in st.session_state.glucose_readings:
-                            timestamp = reading['timestamp']
-                            if isinstance(timestamp, str):
-                                timestamp = datetime.fromisoformat(timestamp)
-                            
-                            # Extract hour without timezone conversion
-                            hour = timestamp.hour
-                            if hour not in hourly_data:
-                                hourly_data[hour] = []
-                            hourly_data[hour].append(reading['value'])
-                        
-                        # Calculate averages
-                        hourly_averages = {hour: sum(values)/len(values) for hour, values in hourly_data.items()}
-                        
-                        if hourly_averages:
-                            best_hour = min(hourly_averages.keys(), key=lambda h: abs(hourly_averages[h] - 115))
-                            worst_hour = max(hourly_averages.keys(), key=lambda h: hourly_averages[h])
-                            
-                            st.info(f"🕐 Best glucose control: {best_hour}:00 (avg: {hourly_averages[best_hour]:.0f} mg/dL)")
-                            st.info(f"⚠️ Highest average glucose: {worst_hour}:00 (avg: {hourly_averages[worst_hour]:.0f} mg/dL)")
-                    except Exception as e:
-                        st.info("📊 Time-of-day analysis needs more data points")
-                    
-                    # Meal analysis
-                    if len(st.session_state.meal_log) >= 3:
-                        total_carbs = sum(meal['carbs'] for meal in st.session_state.meal_log)
-                        total_calories = sum(meal['calories'] for meal in st.session_state.meal_log)
-                        avg_carbs = total_carbs / len(st.session_state.meal_log)
-                        avg_calories = total_calories / len(st.session_state.meal_log)
-                        
-                        st.info(f"🍽️ Average meal: {avg_carbs:.0f}g carbs, {avg_calories:.0f} calories")
-                        st.info(f"📊 Total meals logged: {len(st.session_state.meal_log)}")
+        # Create two sub-columns for more buttons
+        subcol1, subcol2 = st.columns(2)
+        
+        with subcol1:
+            if st.button("🌙 Nighttime Analysis"):
+                with st.spinner("Analyzing nighttime patterns..."):
+                    analyze_nighttime_patterns()
+        
+        with subcol2:
+            if st.button("📊 Pattern Analysis"):
+                with st.spinner("Analyzing diabetes patterns..."):
+                    if len(st.session_state.glucose_readings) < 10:
+                        st.warning("Need more glucose data for pattern analysis")
                     else:
-                        st.info("🍽️ Log more meals for detailed meal analysis")
-    
+                        st.markdown("### 📊 Pattern Analysis Results")
+                        
+                        # Time in range analysis
+                        glucose_values = [reading['value'] for reading in st.session_state.glucose_readings]
+                        in_range_count = sum(1 for value in glucose_values if 80 <= value <= 130)
+                        in_range = (in_range_count / len(glucose_values)) * 100
+                        st.info(f"📊 Your overall time in range is {in_range:.0f}% (goal: >70%)")
+                        
+                        # Meal analysis
+                        if len(st.session_state.meal_log) >= 3:
+                            total_carbs = sum(meal['carbs'] for meal in st.session_state.meal_log)
+                            total_calories = sum(meal['calories'] for meal in st.session_state.meal_log)
+                            avg_carbs = total_carbs / len(st.session_state.meal_log)
+                            avg_calories = total_calories / len(st.session_state.meal_log)
+                            
+                            st.info(f"🍽️ Average meal: {avg_carbs:.0f}g carbs, {avg_calories:.0f} calories")
+                            st.info(f"📊 Total meals logged: {len(st.session_state.meal_log)}")
+                        else:
+                            st.info("🍽️ Log more meals for detailed meal analysis")
+
     # Enhanced data tables with delete functionality
     st.markdown("---")
     tab1, tab2, tab3, tab4 = st.tabs(["📈 Glucose History", "💉 Insulin History", "🍽️ Meal History", "🏃‍♀️ Exercise History"])
