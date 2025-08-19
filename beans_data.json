@@ -245,6 +245,30 @@
       "trend": "falling quickly",
       "trend_arrow": "\u2193\u2193",
       "timestamp": "2025-08-18T19:06:14-04:00"
+    },
+    {
+      "value": 98,
+      "trend": "falling",
+      "trend_arrow": "\u2193",
+      "timestamp": "2025-08-18T19:16:13-04:00"
+    },
+    {
+      "value": 52,
+      "trend": "steady",
+      "trend_arrow": "\u2192",
+      "timestamp": "2025-08-18T19:56:14-04:00"
+    },
+    {
+      "value": 66,
+      "trend": "steady",
+      "trend_arrow": "\u2192",
+      "timestamp": "2025-08-18T20:06:13-04:00"
+    },
+    {
+      "value": 91,
+      "trend": "rising slightly",
+      "trend_arrow": "\u2197",
+      "timestamp": "2025-08-18T20:16:14-04:00"
     }
   ],
   "insulin_log": [],

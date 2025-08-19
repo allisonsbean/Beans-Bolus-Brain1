@@ -649,57 +649,119 @@ def lookup_nutrition_by_barcode(barcode):
                 protein_100g = nutriments.get('proteins_100g', 0)
                 calories_100g = nutriments.get('energy-kcal_100g', 0)
                 
+                # Store product data in session state to persist across reruns
+                st.session_state.current_product = {
+                    'name': product_name,
+                    'serving_size': serving_size,
+                    'carbs_100g': carbs_100g,
+                    'protein_100g': protein_100g,
+                    'calories_100g': calories_100g,
+                    'barcode': barcode
+                }
+                
                 # Display product info
-                st.success(f"✅ Product Found: **{product_name}**")
+                st.success(f"✅ **{product_name}**")
+                st.info(f"📏 **Serving Size:** {serving_size}")
                 
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.info(f"**Serving Size:** {serving_size}")
+                # Show per-100g nutrition in compact format
+                st.write(f"**Per 100g:** 🍞 {carbs_100g}g carbs | 🥩 {protein_100g}g protein | 🔥 {calories_100g} cal")
                 
-                with col2:
-                    st.write("**Nutrition (per 100g):**")
-                    st.write(f"🍞 Carbs: {carbs_100g}g")
-                    st.write(f"🥩 Protein: {protein_100g}g") 
-                    st.write(f"🔥 Calories: {calories_100g}")
-                
-                # Serving size adjustment
-                st.markdown("**Adjust serving size:**")
-                serving_multiplier = st.number_input(
-                    "Serving multiplier", 
-                    min_value=0.1, 
-                    max_value=10.0, 
-                    value=1.0, 
-                    step=0.1,
-                    help="1.0 = one serving, 0.5 = half serving, 2.0 = double serving"
-                )
-                
-                # Calculate actual nutrition
-                actual_carbs = round(carbs_100g * serving_multiplier, 1)
-                actual_protein = round(protein_100g * serving_multiplier, 1)
-                actual_calories = round(calories_100g * serving_multiplier)
-                
-                st.markdown("**Your portion:**")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Carbs", f"{actual_carbs}g")
-                with col2:
-                    st.metric("Protein", f"{actual_protein}g")
-                with col3:
-                    st.metric("Calories", f"{actual_calories}")
-                
-                st.info("💡 Use the regular meal logging to calculate bolus and save this meal!")
-                
-            else:
-                st.error("❌ Product not found in database")
-                st.info("Try a different barcode or use manual entry/photo analysis instead")
-        
         else:
-            st.error("❌ Failed to connect to nutrition database")
-    
+            st.error("❌ Product not found in database")
+            return
+            
     except Exception as e:
         st.error(f"❌ Error looking up barcode: {str(e)}")
-        st.info("Try manual entry or photo analysis instead")
-
+        return
+def show_barcode_nutrition_calculator():
+    """Show nutrition calculator for current product"""
+    if 'current_product' not in st.session_state:
+        st.info("👆 Enter a barcode above to get started")
+        return
+    
+    product = st.session_state.current_product
+    
+    # Extract serving size in grams from the API
+    import re
+    serving_grams = 30  # Default fallback
+    
+    try:
+        serving_size = product['serving_size']
+        # Look for numbers followed by 'g' in the serving_size string
+        grams_match = re.search(r'(\d+)\s*g', serving_size, re.IGNORECASE)
+        if grams_match:
+            serving_grams = int(grams_match.group(1))
+        else:
+            # Look for other patterns like "30" in parentheses
+            number_match = re.search(r'\((\d+)\s*g\)', serving_size, re.IGNORECASE)
+            if number_match:
+                serving_grams = int(number_match.group(1))
+    except:
+        serving_grams = 30  # Keep default if parsing fails
+    
+    # Serving size input (this will persist now)
+    st.markdown("### 📊 Calculate Your Portion")
+    num_servings = st.number_input(
+        f"How many servings? (1 serving = {product['serving_size']})", 
+        min_value=0.1, 
+        max_value=10.0, 
+        value=1.0, 
+        step=0.5,
+        key="barcode_servings"
+    )
+    
+    # Calculate nutrition for actual serving size
+    carbs_per_serving = (product['carbs_100g'] * serving_grams / 100)
+    protein_per_serving = (product['protein_100g'] * serving_grams / 100)
+    calories_per_serving = (product['calories_100g'] * serving_grams / 100)
+    
+    actual_carbs = round(carbs_per_serving * num_servings, 1)
+    actual_protein = round(protein_per_serving * num_servings, 1)
+    actual_calories = round(calories_per_serving * num_servings)
+    
+    # Mobile-friendly compact display
+    st.markdown(f"**Your portion ({num_servings} serving{'s' if num_servings != 1 else ''}):**")
+    
+    # Use simple text instead of metrics for mobile
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(f"🍞 **{actual_carbs}g**  \ncarbs")
+    with col2:
+        st.markdown(f"🥩 **{actual_protein}g**  \nprotein")
+    with col3:
+        st.markdown(f"🔥 **{actual_calories}**  \ncalories")
+    
+    # Show calculation for verification
+    st.caption(f"Calculation: {product['carbs_100g']}g × {serving_grams}g ÷ 100g × {num_servings} = {actual_carbs}g carbs")
+    
+    # Action buttons
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📋 Transfer to Meal Logger", key="transfer_meal_barcode"):
+            st.session_state.barcode_nutrition = {
+                'carbs': actual_carbs,
+                'protein': actual_protein,
+                'calories': actual_calories,
+                'description': product['name']
+            }
+            st.success(f"✅ Transferred: {actual_carbs}g carbs!")
+            st.info("💡 Go to 'Log Meal & Get Bolus Suggestion' to calculate insulin")
+            
+    with col2:
+        if st.button("💉 Quick Bolus", key="quick_bolus_barcode"):
+            # Calculate bolus suggestion
+            if 'glucose_readings' in st.session_state and st.session_state.glucose_readings:
+                carb_bolus = actual_carbs / 12  # Using CARB_RATIO
+                protein_bolus = (actual_protein * 0.1) / 12
+                total_bolus = round(carb_bolus + protein_bolus)
+                
+                st.success(f"💉 **{total_bolus} units suggested**")
+                st.write(f"• {actual_carbs}g carbs = {carb_bolus:.1f}u")
+                if protein_bolus > 0:
+                    st.write(f"• {actual_protein}g protein = {protein_bolus:.1f}u")
+            else:
+                st.info("Need glucose data for bolus calculation")
+        
 def smart_camera_interface():
     """Smart camera interface for both barcodes and food photos"""
     st.subheader("📸 Smart Camera - Barcodes & Food Photos")
@@ -750,16 +812,6 @@ def smart_camera_interface():
                         else:
                             st.warning("📱 **Barcode detected but couldn't read the numbers automatically.**")
                             st.info("Please enter the barcode manually below:")
-                            
-                            # Manual barcode entry as fallback
-                            manual_barcode = st.text_input(
-                                "Enter the numbers from the barcode:", 
-                                placeholder="Look for numbers under the barcode lines",
-                                key="fallback_barcode"
-                            )
-                            
-                            if manual_barcode and st.button("🔍 Look Up Product", key="fallback_lookup"):
-                                lookup_nutrition_by_barcode(manual_barcode)
                     
                     else:
                         st.info("🍽️ **Food photo detected!** Analyzing with Claude AI...")
@@ -784,10 +836,13 @@ def smart_camera_interface():
     # Manual barcode entry option
     st.markdown("---")
     st.markdown("**Or enter barcode manually:**")
-    manual_barcode = st.text_input("UPC/Barcode:", placeholder="Enter barcode numbers")
+    manual_barcode = st.text_input("UPC/Barcode:", placeholder="Enter barcode numbers", key="manual_barcode_input")
     
     if manual_barcode and st.button("🔍 Look Up Product", key="manual_lookup"):
         lookup_nutrition_by_barcode(manual_barcode)
+    
+    # Show nutrition calculator if we have a product
+    show_barcode_nutrition_calculator()
         
 def analyze_nighttime_patterns():
     """Enhanced analysis specifically for nighttime low patterns"""
@@ -1255,18 +1310,27 @@ def main():
                 with col2:
                     st.image(uploaded_file, width=150)
             
-            # Manual entry with defaults from Claude AI analysis
+            # Manual entry with defaults from barcode or Claude AI analysis
             st.markdown("**📝 Manual Entry**")
-            default_carbs = st.session_state.get('photo_analysis', {}).get('total_carbs', 30)
-            default_protein = st.session_state.get('photo_analysis', {}).get('total_protein', 0)
-            default_calories = st.session_state.get('photo_analysis', {}).get('total_calories', 0)
             
+            # Use barcode data if available, otherwise photo analysis
+            if 'barcode_nutrition' in st.session_state:
+                default_carbs = st.session_state.barcode_nutrition.get('carbs', 30)
+                default_protein = st.session_state.barcode_nutrition.get('protein', 0)
+                default_calories = st.session_state.barcode_nutrition.get('calories', 0)
+                default_description = st.session_state.barcode_nutrition.get('description', '')
+            else:
+                default_carbs = st.session_state.get('photo_analysis', {}).get('total_carbs', 30)
+                default_protein = st.session_state.get('photo_analysis', {}).get('total_protein', 0)
+                default_calories = st.session_state.get('photo_analysis', {}).get('total_calories', 0)
+                default_description = ''
+                
             col1, col2 = st.columns([2, 1])
             with col1:
                 meal_carbs = st.number_input("Carbs (g)", min_value=0, max_value=200, value=int(default_carbs))
                 meal_protein = st.number_input("Protein (g)", min_value=0, max_value=100, value=int(default_protein))
                 meal_calories = st.number_input("Calories", min_value=0, max_value=2000, value=int(default_calories))
-                meal_description = st.text_input("Meal description")
+                meal_description = st.text_input("Meal description", value=default_description)
             
             with col2:
                 meal_date = st.date_input("Date", value=current_date, key="meal_date")
