@@ -269,9 +269,41 @@
       "trend": "rising slightly",
       "trend_arrow": "\u2197",
       "timestamp": "2025-08-18T20:16:14-04:00"
+    },
+    {
+      "value": 305,
+      "trend": "steady",
+      "trend_arrow": "\u2192",
+      "timestamp": "2025-08-19T21:11:17-04:00"
+    },
+    {
+      "value": 280,
+      "trend": "falling slightly",
+      "trend_arrow": "\u2198",
+      "timestamp": "2025-08-19T22:01:17-04:00"
     }
   ],
-  "insulin_log": [],
-  "meal_log": [],
-  "exercise_log": []
+  "insulin_log": [
+    {
+      "timestamp": "2025-08-19T22:03:58.720977-04:00",
+      "type": "bolus",
+      "dose": 5,
+      "notes": "Meal bolus: Milk and caramel filled squares large",
+      "ratio_used": 12,
+      "reasoning": []
+    }
+  ],
+  "meal_log": [
+    {
+      "timestamp": "2025-08-19T22:03:58.720977-04:00",
+      "carbs": 18,
+      "protein": 2,
+      "calories": 150,
+      "description": "Milk and caramel filled squares large",
+      "context": {},
+      "method": "barcode"
+    }
+  ],
+  "exercise_log": [],
+  "last_saved": "2025-08-19T22:03:58.720991-04:00"
 }

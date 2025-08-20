@@ -7,4 +7,3 @@ pydexcom
 anthropic
 Pillow
 requests
-pyzbar
